@@ -116,7 +116,7 @@ export const GET: APIRoute = async ({ locals, url }) => {
     const { data: sessions } = await supabaseAdmin
         .from("game_sessions")
         .select("player_id")
-        .eq("round_id", roundIdNum)
+        .eq("round_id", round.id)
         .eq("finished", false);
     if (sessions) sessions.forEach((s) => s.player_id && playerIds.add(s.player_id));
 

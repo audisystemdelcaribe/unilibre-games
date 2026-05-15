@@ -856,6 +856,47 @@ if (confirmResult?.data?.clasico_round_id) {
 
     setTimeout(sync, 300);
     setInterval(sync, 1500);
+
+    // Suscripción Realtime para detectar nuevos participantes en el lobby
+    if (window.supabaseClient && !isClasico) {
+        const rtRoundId = roundId || round?.id;
+        if (rtRoundId) {
+            const lobbyChannel = window.supabaseClient
+                .channel(`lobby-${rtRoundId}`)
+                .on('postgres_changes', {
+                    event: 'INSERT',
+                    schema: 'public',
+                    table: 'game_sessions',
+                    filter: `round_id=eq.${rtRoundId}`
+                }, async (payload) => {
+                    const newPlayerId = payload.new.player_id;
+                    if (procesados.has(String(newPlayerId))) return;
+                    procesados.add(String(newPlayerId));
+
+                    const { data: player } = await window.supabaseClient
+                        .from('players')
+                        .select('name')
+                        .eq('id', newPlayerId)
+                        .single();
+
+                    const name = player?.name || 'Estudiante';
+                    const grid = document.getElementById('players-grid');
+                    if (grid) {
+                        const div = document.createElement('div');
+                        div.className = "bg-blue-50 p-3 rounded-xl border border-blue-100 text-[10px] font-bold text-blue-600 text-center";
+                        div.innerText = name;
+                        grid.appendChild(div);
+                    }
+                })
+                .subscribe();
+
+            // Cleanup al salir
+            window.addEventListener('beforeunload', () => {
+                lobbyChannel.unsubscribe();
+            });
+        }
+    }
+
     if (document.getElementById('audience-votes-box') && !document.getElementById('audience-votes-box').classList.contains('hidden')) {
         fetchAudienceVotes();
         setInterval(fetchAudienceVotes, 3000);
