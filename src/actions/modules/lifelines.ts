@@ -1,6 +1,6 @@
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
-import { applyScopeFilter, type EventScope } from '../../lib/questionScope';
+import { applyScopeFilter, filterQuestionsByEventScope, type EventScope } from '../../lib/questionScope';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { ensureAdmin, ensureStaffFull } from '../utils';
 
@@ -132,11 +132,12 @@ export const lifelinesActions = {
                 }
             }
 
-            let query = supabaseAdmin.from('questions').select('id').eq('level_id', currentQ.level_id).eq('active', true);
+            let query = supabaseAdmin.from('questions').select('id, scope, program_id, faculty_id').eq('level_id', currentQ.level_id).eq('active', true);
             query = applyScopeFilter(query, round.events as EventScope);
             if (playerSemester != null) query = query.lte('min_semester', playerSemester).gte('max_semester', playerSemester);
             const { data: available } = await query;
-            const availableIds = (available || []).map((q: { id: number }) => q.id).filter((id: number) => !usedIds.includes(id));
+            const scoped = filterQuestionsByEventScope(available || [], round.events as EventScope);
+            const availableIds = scoped.map((q) => q.id).filter((id: number) => !usedIds.includes(id));
 
             if (availableIds.length === 0) throw new Error("No hay más preguntas de este nivel disponibles.");
 

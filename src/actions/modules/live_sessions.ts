@@ -1,7 +1,14 @@
 // src/actions/modules/live_sessions.ts
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
-import { applyScopeFilter, type EventScope } from '../../lib/questionScope';
+import {
+    applyScopeFilter,
+    filterQuestionsByEventScope,
+    normalizeEventScope,
+    questionMatchesEventScope,
+    scopeOptionsForGameMode,
+    type EventScope,
+} from '../../lib/questionScope';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { ensureStaff, ensureStaffFull } from '../utils';
 
@@ -186,7 +193,7 @@ export const liveSessionsActions = {
 
             const { data: r } = await supabaseAdmin
                 .from('event_rounds')
-                .select('status, events(game_mode_id)')
+                .select('status, events(game_mode_id, scope, program_id, faculty_id)')
                 .eq('id', rId)
                 .single();
             if (!r) throw new Error("Ronda no encontrada");
@@ -198,6 +205,16 @@ export const liveSessionsActions = {
             }
             if ((r.events as { game_mode_id?: number })?.game_mode_id === 3) {
                 throw new Error("En Mente más Rápida usa 'Confirmar ganador' para pasar a Silla Caliente.");
+            }
+
+            const { data: question } = await supabaseAdmin
+                .from('questions')
+                .select('scope, program_id, faculty_id')
+                .eq('id', qId)
+                .single();
+            if (!question) throw new Error("Pregunta no encontrada");
+            if (!questionMatchesEventScope(question, r.events as EventScope, scopeOptionsForGameMode(rGm))) {
+                throw new Error("Esta pregunta no pertenece al programa o ámbito de este evento.");
             }
 
             try {
@@ -482,9 +499,11 @@ export const liveSessionsActions = {
                 .maybeSingle();
             const firstLevelId = firstLevel?.id ?? 1;
 
+            const scopeOpts = scopeOptionsForGameMode(gameModeId);
+
             let query = supabaseAdmin
                 .from('questions')
-                .select('id')
+                .select('id, scope, program_id, faculty_id')
                 .eq('level_id', firstLevelId)
                 .eq('active', true);
             query = applyScopeFilter(query, round.events as EventScope);
@@ -496,19 +515,28 @@ export const liveSessionsActions = {
 
             const { data: allMatching } = await query;
 
+            const scoped = filterQuestionsByEventScope(allMatching || [], round.events as EventScope, scopeOpts);
+
             // Filtrar en JS para garantizar que NUNCA repetimos (más fiable que .not() de Supabase)
-            const availableIds = (allMatching || [])
-                .map((q: { id: number }) => q.id)
+            const availableIds = scoped
+                .map((q) => q.id)
                 .filter((id: number) => !usedIds.includes(id));
 
             if (availableIds.length === 0) {
-                const hint = playerSemester != null ? ` (semestre ${playerSemester} o compatible)` : '';
-                throw new Error(`¡Se agotaron las preguntas de este nivel para esta sesión${hint}! Puedes finalizar el juego o agregar más preguntas de Nivel 1.`);
+                const evtScope = normalizeEventScope(round.events as EventScope);
+                const scopeHint =
+                    gameModeId === 1 && evtScope?.scope === 'program'
+                        ? ' para este programa'
+                        : gameModeId === 1 && evtScope?.scope === 'faculty'
+                          ? ' para esta facultad'
+                          : '';
+                const semHint = playerSemester != null ? ` (semestre ${playerSemester} o compatible)` : '';
+                throw new Error(`¡Se agotaron las preguntas de este nivel${scopeHint} para esta sesión${semHint}! Puedes finalizar el juego o agregar más preguntas de Nivel 1.`);
             }
 
             // 4. Azar y actualización (solo de las no usadas)
             const chosenId = availableIds[Math.floor(Math.random() * availableIds.length)];
-            const randomQ = allMatching?.find((q: { id: number }) => q.id === chosenId);
+            const randomQ = scoped.find((q) => q.id === chosenId);
 
             if (!randomQ) throw new Error("Error al seleccionar pregunta");
 
