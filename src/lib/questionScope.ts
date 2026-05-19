@@ -88,3 +88,14 @@ export function scopeOptionsForGameMode(gameModeId: number | undefined): { inclu
     if (gameModeId === 1) return { includeGlobal: false };
     return { includeGlobal: true };
 }
+
+/** Lanza error si la pregunta no corresponde al ámbito del evento. */
+export function assertQuestionMatchesEventScope(
+    q: QuestionScopeFields,
+    evt: EventScope | EventScope[] | null | undefined,
+    gameModeId: number | undefined
+): void {
+    if (!questionMatchesEventScope(q, evt, scopeOptionsForGameMode(gameModeId))) {
+        throw new Error('La pregunta no pertenece al programa o ámbito de este evento.');
+    }
+}

@@ -23,9 +23,9 @@ const supabaseUrl = import.meta.env.PUBLIC_SUPABASE_URL;
 const supabaseKey = import.meta.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
 
-// 1. Recuperar sesión y perfil (Asegúrate que esto no falle)
-const user = await Astro.locals.getUser();
-const { data: { session } } = await Astro.locals.supabase.auth.getSession();
+// Sesión ya resuelta en middleware (una sola vez por request)
+const user = Astro.locals.user;
+const accessToken = Astro.locals.accessToken;
 const { data: profile } = await Astro.locals.supabase
     .from('players')
     .select('*')
@@ -83,19 +83,17 @@ const filteredMenu = menuOptions.filter(opt => opt.roles.includes(role));
     <script is:inline define:vars={{
         url: import.meta.env.PUBLIC_SUPABASE_URL,
         key: import.meta.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-        accessToken: session?.access_token ?? '',
-        refreshToken: session?.refresh_token ?? ''
+        accessToken: accessToken ?? ''
     }}>
         if (typeof supabase !== 'undefined') {
             window.supabaseClient = supabase.createClient(url, key, {
-                realtime: { params: { events_per_second: 10 } }
+                auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+                realtime: { params: { events_per_second: 10 } },
+                global: accessToken ? { headers: { Authorization: 'Bearer ' + accessToken } } : {}
             });
-            if (accessToken && refreshToken) {
-                window.supabaseClient.auth.setSession({ access_token: accessToken, refresh_token: refreshToken }).then(
-                    () => { if (window.supabaseClient?.realtime) window.supabaseClient.realtime.setAuth(); }
-                ).catch(() => {});
+            if (accessToken && window.supabaseClient.realtime) {
+                window.supabaseClient.realtime.setAuth(accessToken);
             }
-            console.log("✅ Supabase Global Inicializado");
         } else {
             console.error("❌ Error: La librería Supabase no cargó desde el CDN");
         }

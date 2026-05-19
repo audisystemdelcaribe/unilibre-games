@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { assertQuestionMatchesEventScope, type EventScope } from "@/lib/questionScope";
 
 /**
  * API para enviar respuesta en preselección (game_mode_id=1).
@@ -49,8 +50,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const now = Date.now();
 
     const [roundRes, questionRes, answerRes, playerRes] = await Promise.all([
-        supabaseAdmin.from("event_rounds").select("*, events(game_mode_id)").eq("id", parseInt(round_id)).single(),
-        supabaseAdmin.from("questions").select("*, game_levels(points, time_limit)").eq("id", parseInt(question_id)).single(),
+        supabaseAdmin.from("event_rounds").select("*, events(game_mode_id, scope, program_id, faculty_id)").eq("id", parseInt(round_id)).single(),
+        supabaseAdmin.from("questions").select("*, game_levels(points, time_limit), scope, program_id, faculty_id").eq("id", parseInt(question_id)).single(),
         supabaseAdmin.from("answers").select("is_correct, question_id").eq("id", parseInt(answer_id)).single(),
         supabaseAdmin.from("players").select("id").eq("auth_user_id", user.id).single(),
     ]);
@@ -87,10 +88,30 @@ export const POST: APIRoute = async ({ request, locals }) => {
             headers: { "Content-Type": "application/json" },
         });
     }
+    if (!questionRes.data) {
+        return new Response(JSON.stringify({ error: "Pregunta no encontrada" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+        });
+    }
+
+    const gameModeId = (roundRes.data?.events as { game_mode_id?: number })?.game_mode_id;
+    try {
+        assertQuestionMatchesEventScope(
+            questionRes.data,
+            roundRes.data.events as EventScope,
+            gameModeId
+        );
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : "Pregunta no válida para este evento";
+        return new Response(JSON.stringify({ error: msg }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+        });
+    }
 
     const startTime = new Date(roundRes.data.question_started_at).getTime();
     const responseMs = now - startTime;
-    const gameModeId = (roundRes.data?.events as { game_mode_id?: number })?.game_mode_id;
     const limitMs = (gameModeId === 1 ? 30 : ((questionRes.data?.game_levels as { time_limit?: number })?.time_limit ?? 30)) * 1000;
     const isCorrect = answerRes.data.is_correct ?? false;
 

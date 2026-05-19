@@ -1,16 +1,43 @@
 ---
 import DashboardLayout from "@/layouts/DashboardLayout.astro";
 import { Icon } from 'astro-icon/components';
+import { actions } from "astro:actions";
+import FormButton from "@/components/FormButton.astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+    eventMatchesProgramFilter,
+    getFinalistGroupKey,
+    type EventForFinalist,
+} from "@/lib/finalistScope";
 
 const user = await Astro.locals.getUser();
 if (!user) return Astro.redirect("/");
 const { data: profile } = await Astro.locals.supabase.from('players').select('role').eq('auth_user_id', user.id).single();
 if (profile?.role !== 'admin' && profile?.role !== 'docente') return Astro.redirect("/dashboard");
 
+const removeResult = Astro.getActionResult(actions.removeFinalist);
+if (removeResult?.data?.redirectTo) {
+    return Astro.redirect(removeResult.data.redirectTo);
+}
+
 // Filtros desde URL
 const seasonId = Astro.url.searchParams.get('season_id') ? parseInt(Astro.url.searchParams.get('season_id')!) : null;
 const programId = Astro.url.searchParams.get('program_id') ? parseInt(Astro.url.searchParams.get('program_id')!) : null;
+
+type FinalistRow = {
+    player_id: number;
+    event_id: number;
+    name: string;
+    score: number;
+    final_rank: number;
+    eventName: string;
+    classroom_group: string;
+    classroom_group_id: string;
+    semester: number | null;
+    email: string;
+    playerProgramName: string;
+    programMismatch: boolean;
+};
 
 // Cargar temporadas y programas
 const { data: seasons } = await Astro.locals.supabase
@@ -24,17 +51,20 @@ const { data: programs } = await Astro.locals.supabase
     .select('id, name')
     .order('name');
 
-// Obtener finalistas si hay temporada seleccionada
-let finalistsByProgram: { programId: number; programName: string; finalists: { player_id: number; name: string; score: number; final_rank: number; eventName: string; classroom_group: string; semester: number | null; email: string }[] }[] = [];
+let finalistsByProgram: { programId: number; programName: string; finalists: FinalistRow[] }[] = [];
+let hasProgramMismatches = false;
 
 if (seasonId) {
     const { data: seasonEvents } = await supabaseAdmin
         .from('events')
-        .select('id, name')
-        .eq('season_id', seasonId);
+        .select('id, name, scope, program_id, faculty_id, game_mode_id, programs(id, name)')
+        .eq('season_id', seasonId)
+        .eq('game_mode_id', 1);
 
     const eventIds = (seasonEvents || []).map((e: { id: number }) => e.id);
-    const eventMap = new Map((seasonEvents || []).map((e: { id: number; name: string }) => [e.id, e.name]));
+    const eventMap = new Map<number, EventForFinalist>(
+        (seasonEvents || []).map((e: EventForFinalist) => [e.id, e])
+    );
 
     if (eventIds.length > 0) {
         const { data: eps } = await supabaseAdmin
@@ -52,16 +82,22 @@ if (seasonId) {
             final_rank: number;
             event_id: number;
             classroom_group_id: string | null;
-            players: { id: number; name: string; program_id: number | null; semester: number | null; auth_user_id: string | null; programs: { id: number; name: string } | null } | null;
+            players: {
+                id: number;
+                name: string;
+                program_id: number | null;
+                semester: number | null;
+                auth_user_id: string | null;
+                programs: { id: number; name: string } | null;
+            } | null;
         };
 
         let items = (eps || []) as EP[];
 
         if (programId) {
-            items = items.filter((ep) => ep.players?.program_id === programId);
+            items = items.filter((ep) => eventMatchesProgramFilter(ep.event_id, programId, eventMap));
         }
 
-        // Obtener emails de auth (en paralelo para los auth_user_id únicos)
         const authIds = [...new Set(items.map((ep) => ep.players?.auth_user_id).filter(Boolean))] as string[];
         const emailMap: Record<string, string> = {};
         await Promise.all(
@@ -71,43 +107,79 @@ if (seasonId) {
             })
         );
 
-        // Agrupar por programa
-        const byProgram = new Map<number, { programName: string; list: { player_id: number; name: string; score: number; final_rank: number; eventName: string; classroom_group: string; semester: number | null; email: string }[] }>();
+        const byProgram = new Map<number, { programName: string; list: FinalistRow[] }>();
 
         for (const ep of items) {
-            const progId = ep.players?.program_id ?? -1;
-            const progName = ep.players?.programs?.name ?? 'Sin programa';
+            const evt = eventMap.get(ep.event_id);
+            const { key: progId, label: progName } = getFinalistGroupKey(
+                ep.event_id,
+                ep.players?.program_id,
+                eventMap
+            );
             const authId = ep.players?.auth_user_id ?? '';
+            const eventProgId =
+                evt?.scope === 'program' && evt.program_id != null ? Number(evt.program_id) : null;
+            const playerProgId = ep.players?.program_id ?? null;
+            const programMismatch =
+                eventProgId != null && playerProgId != null && eventProgId !== playerProgId;
+            if (programMismatch) hasProgramMismatches = true;
 
             if (!byProgram.has(progId)) {
                 byProgram.set(progId, { programName: progName, list: [] });
             }
             byProgram.get(progId)!.list.push({
                 player_id: ep.player_id,
+                event_id: ep.event_id,
                 name: ep.players?.name ?? 'Desconocido',
                 score: ep.score ?? 0,
                 final_rank: ep.final_rank ?? 1,
-                eventName: eventMap.get(ep.event_id) ?? '—',
+                eventName: evt?.name ?? '—',
                 classroom_group: ep.classroom_group_id ?? '—',
+                classroom_group_id: ep.classroom_group_id ?? '',
                 semester: ep.players?.semester ?? null,
                 email: emailMap[authId] ?? '—',
+                playerProgramName: ep.players?.programs?.name ?? '—',
+                programMismatch,
             });
         }
 
         finalistsByProgram = Array.from(byProgram.entries())
-            .map(([progId, data]) => ({ programId: progId, programName: data.programName, finalists: data.list }))
+            .map(([pid, data]) => ({
+                programId: pid,
+                programName: data.programName,
+                finalists: data.list.sort((a, b) => b.score - a.score),
+            }))
             .sort((a, b) => a.programName.localeCompare(b.programName));
     }
 }
+
+const actionResult = removeResult;
 ---
 
-<DashboardLayout title="Finalistas por Programa">
-    <div class="mb-8">
+<DashboardLayout title="Finalistas por Programa" actionResult={actionResult}>
+    <div class="mb-8" replace_all
+false
         <h1 class="text-4xl font-black italic tracking-tighter text-slate-900 uppercase">
             Finalistas <span class="text-red-600">por Programa</span>
         </h1>
-        <p class="text-slate-500 font-medium mt-1">Consulta los ganadores por temporada y programa</p>
+        <p class="text-slate-500 font-medium mt-1">
+            Ganadores de Preselección por temporada. El listado agrupa por el programa del evento, no solo por el perfil del estudiante.
+        </p>
     </div>
+
+    {hasProgramMismatches && (
+        <div class="alert alert-warning mb-6 shadow-sm">
+            <Icon name="lucide:alert-triangle" class="w-5 h-5 shrink-0" />
+            <div>
+                <p class="font-bold text-sm">Posible mezcla de salones en pruebas</p>
+                <p class="text-xs mt-1">
+                    Hay finalistas cuyo programa en el perfil no coincide con el programa del evento.
+                    Suele ocurrir si estudiantes de distintos programas entraron al mismo PIN.
+                    Puedes quitar registros incorrectos con el botón Eliminar.
+                </p>
+            </div>
+        </div>
+    )}
 
     <!-- Filtros -->
     <form method="GET" action="/dashboard/finalistas" class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 mb-8">
@@ -169,16 +241,18 @@ if (seasonId) {
                                 <tr class="bg-slate-50/50">
                                     <th class="font-black text-[10px] uppercase text-slate-500">#</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Estudiante</th>
+                                    <th class="font-black text-[10px] uppercase text-slate-500">Prog. perfil</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Grupo</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Semestre</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Correo</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Puntaje</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Evento</th>
+                                    <th class="font-black text-[10px] uppercase text-slate-500 w-24"></th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {group.finalists.map((f, i) => (
-                                    <tr>
+                                    <tr class:list={[f.programMismatch && "bg-amber-50/80"]}>
                                         <td class="font-bold text-slate-600">{i + 1}</td>
                                         <td>
                                             <div class="flex items-center gap-3">
@@ -186,13 +260,40 @@ if (seasonId) {
                                                     {f.name.charAt(0)}
                                                 </div>
                                                 <span class="font-bold text-slate-800">{f.name}</span>
+                                                {f.programMismatch && (
+                                                    <span class="badge badge-warning badge-xs" title="Perfil distinto al programa del evento">Mezcla</span>
+                                                )}
                                             </div>
                                         </td>
+                                        <td class="text-sm text-slate-600">{f.playerProgramName}</td>
                                         <td class="text-sm text-slate-600">{f.classroom_group}</td>
                                         <td class="text-sm text-slate-600">{f.semester ?? '—'}</td>
                                         <td class="text-sm text-slate-600">{f.email}</td>
                                         <td class="font-bold text-slate-700">{f.score?.toLocaleString('es-CO') ?? '—'}</td>
                                         <td class="text-sm text-slate-600">{f.eventName}</td>
+                                        <td>
+                                            <form
+                                                method="POST"
+                                                action={actions.removeFinalist}
+                                                class="inline"
+                                                onsubmit="return confirm('¿Quitar a este estudiante como finalista? Ya no podrá entrar a Mente más Rápida con este criterio.');"
+                                            >
+                                                <input type="hidden" name="event_id" value={f.event_id} />
+                                                <input type="hidden" name="player_id" value={f.player_id} />
+                                                {f.classroom_group_id && (
+                                                    <input type="hidden" name="classroom_group_id" value={f.classroom_group_id} />
+                                                )}
+                                                {seasonId && <input type="hidden" name="season_id" value={seasonId} />}
+                                                {programId && <input type="hidden" name="program_id" value={programId} />}
+                                                <FormButton
+                                                    type="submit"
+                                                    class="btn btn-ghost btn-xs text-red-600 hover:bg-red-50 border border-red-200"
+                                                >
+                                                    <Icon name="lucide:trash-2" class="w-3.5 h-3.5" />
+                                                    Eliminar
+                                                </FormButton>
+                                            </form>
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>

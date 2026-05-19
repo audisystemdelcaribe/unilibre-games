@@ -3,6 +3,7 @@ import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
 import {
     applyScopeFilter,
+    assertQuestionMatchesEventScope,
     filterQuestionsByEventScope,
     normalizeEventScope,
     questionMatchesEventScope,
@@ -107,6 +108,33 @@ export const liveSessionsActions = {
 
             const gameModeId = (round.events as { game_mode_id?: number })?.game_mode_id;
             const roundStatus = (round as { status?: string })?.status;
+            const evt = round.events as {
+                game_mode_id?: number;
+                season_id?: number;
+                program_id?: number | null;
+                faculty_id?: number | null;
+                scope?: string;
+            };
+
+            // Preselección por programa: solo estudiantes de ese programa (evita mezcla de salones)
+            if (gameModeId === 1 && evt?.scope === 'program' && evt.program_id != null) {
+                const { data: pl } = await supabaseAdmin
+                    .from('players')
+                    .select('program_id, programs(name)')
+                    .eq('id', player.id)
+                    .single();
+                if (pl?.program_id == null) {
+                    throw new Error('Actualiza tu programa en Mi cuenta antes de participar.');
+                }
+                if (Number(pl.program_id) !== Number(evt.program_id)) {
+                    const progName = (pl.programs as { name?: string } | null)?.name;
+                    throw new Error(
+                        progName
+                            ? `Este salón es solo para el programa del evento. Tu perfil está en «${progName}».`
+                            : 'Este salón es solo para estudiantes del programa del evento.'
+                    );
+                }
+            }
 
             // 2a. "Ayudar a participante": siempre ir como público
             if (as_audience) return { success: true, round_id: round.id, audience_only: true };
@@ -114,7 +142,6 @@ export const liveSessionsActions = {
             // 2b. Mente más Rápida: solo finalistas del evento Preselección (game_mode 1) misma temporada/ámbito
             if (gameModeId === 3 || roundStatus === 'fastest_finger') {
                 const { isFinalistInPreseleccion } = await import('../../lib/preseleccionFinalist');
-                const evt = round.events as { season_id?: number; program_id?: number | null; faculty_id?: number | null; scope?: string };
                 const isFinalist = await isFinalistInPreseleccion(supabaseAdmin, player.id, evt || {});
                 if (!isFinalist) throw new Error("Solo los finalistas (ganadores de preselección) pueden participar en Mente más Rápida.");
             }
@@ -254,8 +281,8 @@ export const liveSessionsActions = {
 
             // 1. Obtener datos (Carga rápida)
             const [roundRes, questionRes, answerRes, playerRes] = await Promise.all([
-                supabaseAdmin.from('event_rounds').select('*, events(game_mode_id)').eq('id', parseInt(round_id)).single(),
-                supabaseAdmin.from('questions').select('*, game_levels(points, time_limit)').eq('id', parseInt(question_id)).single(),
+                supabaseAdmin.from('event_rounds').select('*, events(game_mode_id, scope, program_id, faculty_id)').eq('id', parseInt(round_id)).single(),
+                supabaseAdmin.from('questions').select('*, game_levels(points, time_limit), scope, program_id, faculty_id').eq('id', parseInt(question_id)).single(),
                 supabaseAdmin.from('answers').select('is_correct, question_id').eq('id', parseInt(answer_id)).single(),
                 supabaseAdmin.from('players').select('id').eq('auth_user_id', user?.id).single()
             ]);
@@ -268,9 +295,15 @@ export const liveSessionsActions = {
             if (!answerRes.data) throw new Error("Respuesta no encontrada");
             if (answerRes.data.question_id !== qId) throw new Error("Respuesta inválida para esta pregunta");
             if (roundRes.data?.current_question_id !== qId) throw new Error("Esta pregunta ya no está activa");
+            if (!questionRes.data) throw new Error("Pregunta no encontrada");
+            const gameModeId = (roundRes.data?.events as { game_mode_id?: number })?.game_mode_id;
+            assertQuestionMatchesEventScope(
+                questionRes.data,
+                roundRes.data.events as EventScope,
+                gameModeId
+            );
             const startTime = new Date(roundRes.data.question_started_at).getTime();
             const responseMs = now - startTime;
-            const gameModeId = (roundRes.data?.events as { game_mode_id?: number })?.game_mode_id;
             const limitMs = (gameModeId === 1 ? 30 : ((questionRes.data?.game_levels as any)?.time_limit || 30)) * 1000;
             const isCorrect = answerRes.data?.is_correct ?? false;
 

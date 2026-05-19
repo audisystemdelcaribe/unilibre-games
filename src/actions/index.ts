@@ -11,6 +11,7 @@ import { eventsActions } from './modules/events.ts';
 import { liveSessionsActions } from './modules/live_sessions.ts';
 import { usersActions } from './modules/users.ts';
 import { authActions } from './modules/auth.ts';
+import { finalistsActions } from './modules/finalists.ts';
 
 export const server = {
     ...facultiesActions,
@@ -25,5 +26,6 @@ export const server = {
     ...eventsActions,
     ...liveSessionsActions,
     ...usersActions,
-    ...authActions
+    ...authActions,
+    ...finalistsActions
 };
