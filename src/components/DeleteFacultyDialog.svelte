@@ -7,7 +7,7 @@
     let { facultyId, facultyName } = $props();
     let isOpen = $state(false);
     let isDeleting = $state(false);
-
+ 
     async function handleDelete() {
         isDeleting = true;
         const { error } = await actions.deleteFaculty({ id: facultyId });
