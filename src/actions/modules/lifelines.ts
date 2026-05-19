@@ -1,5 +1,6 @@
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
+import { markQuestionShown } from '../../lib/gameAnswer';
 import { applyScopeFilter, filterQuestionsByEventScope, type EventScope } from '../../lib/questionScope';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { ensureAdmin, ensureStaffFull } from '../utils';
@@ -142,7 +143,7 @@ export const lifelinesActions = {
             if (availableIds.length === 0) throw new Error("No hay más preguntas de este nivel disponibles.");
 
             const chosenId = availableIds[Math.floor(Math.random() * availableIds.length)];
-            await supabaseAdmin.from('round_questions_shown').insert({ round_id: rId, question_id: chosenId });
+            await markQuestionShown(rId, chosenId);
             await supabaseAdmin.from('event_rounds').update({
                 current_question_id: chosenId,
                 question_started_at: new Date().toISOString(),

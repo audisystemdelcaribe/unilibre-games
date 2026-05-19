@@ -492,8 +492,15 @@ const debugResult = result ? {
                         const res = await fetch('/api/submit-answer', { method: 'POST', body: formData });
                         const data = await res.json();
                         if (!res.ok) {
-                            alert('Error: ' + (data?.error || res.statusText));
+                            const errMsg = data?.error || res.statusText || '';
+                            if (/duplicate|duplicad/i.test(errMsg)) {
+                                showResult(data?.correct != null ? data : { correct: false, points: 0 });
+                                return;
+                            }
+                            alert('Error: ' + errMsg);
                             form.dataset.submitting = '0';
+                            window.gameAnswered = false;
+                            form.querySelectorAll('.option-btn').forEach((b) => { b.disabled = false; b.style.opacity = '1'; });
                             return;
                         }
                         // Preselección: sonido al evaluar, parpadeo y confetti una sola vez si acertó

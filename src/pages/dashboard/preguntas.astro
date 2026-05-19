@@ -14,6 +14,7 @@ const result = Astro.getActionResult(actions.saveQuestion) || Astro.getActionRes
 
 // --- LÓGICA DE FILTROS, BÚSQUEDA Y PAGINACIÓN ---
 const url = new URL(Astro.request.url);
+const tab = url.searchParams.get('tab') === 'resumen' ? 'resumen' : 'listado';
 const search = url.searchParams.get('search') || '';
 const fSubject = url.searchParams.get('fSubject') || '';
 const fLevel = url.searchParams.get('fLevel') || '';
@@ -22,45 +23,261 @@ const pageSize = 10;
 const from = (page - 1) * pageSize;
 const to = from + pageSize - 1;
 
-// 1. Construir consulta dinámica
-let query = Astro.locals.supabase
-    .from('questions')
-    .select('*, subjects(name), game_levels(name, money_value), answers(*)', { count: 'exact' });
-
-// Aplicar filtros si existen
-if (search) query = query.ilike('question_text', `%${search}%`);
-if (fSubject) query = query.eq('subject_id', fSubject);
-if (fLevel) query = query.eq('level_id', fLevel);
-
-const { data: questions, count, error: qError } = await query
-    .order('id', { ascending: false })
-    .range(from, to);
-
-if (qError) console.error("Error cargando preguntas:", qError);
-
-const totalPages = Math.ceil((count || 0) / pageSize);
-
-// 2. Datos para los selectores (Filtros y Modal)
+// Datos para los selectores (Filtros y Modal)
 const { data: faculties } = await Astro.locals.supabase.from('faculties').select('id, name').order('name');
 const { data: allPrograms } = await Astro.locals.supabase.from('programs').select('id, name, faculty_id').order('name');
 const { data: levels } = await Astro.locals.supabase.from('game_levels').select('id, name, money_value').order('difficulty_order');
 const { data: subjectMappings } = await Astro.locals.supabase.from('program_subjects').select('program_id, subject_id, subjects(name)');
 const { data: allSubjects } = await Astro.locals.supabase.from('subjects').select('id, name').order('name');
+
+const programNameById = new Map((allPrograms || []).map((p) => [p.id, p.name]));
+const facultyNameById = new Map((faculties || []).map((f) => [f.id, f.name]));
+const subjectNameById = new Map((allSubjects || []).map((s) => [s.id, s.name]));
+
+type SummaryRow = { label: string; count: number; detail?: string };
+
+let questions: Record<string, unknown>[] | null = [];
+let count = 0;
+let totalPages = 0;
+
+let summary: {
+    total: number;
+    active: number;
+    inactive: number;
+    global: number;
+    byFaculty: SummaryRow[];
+    byProgram: SummaryRow[];
+    bySubject: SummaryRow[];
+    bySemester: SummaryRow[];
+    byLevel: SummaryRow[];
+} | null = null;
+
+if (tab === 'resumen') {
+    const { data: allQ } = await Astro.locals.supabase
+        .from('questions')
+        .select('id, scope, program_id, faculty_id, subject_id, min_semester, max_semester, active, level_id');
+
+    const rows = allQ || [];
+    const facultyCounts = new Map<number, number>();
+    const programCounts = new Map<number, number>();
+    const subjectCounts = new Map<number, number>();
+    const levelCounts = new Map<number, number>();
+    const semesterCounts = new Map<number, number>();
+    for (let s = 1; s <= 12; s++) semesterCounts.set(s, 0);
+
+    let globalCount = 0;
+    let activeCount = 0;
+
+    for (const q of rows) {
+        if (q.active !== false) activeCount++;
+        if (q.scope === 'global') globalCount++;
+        else if (q.scope === 'faculty' && q.faculty_id != null) {
+            facultyCounts.set(q.faculty_id, (facultyCounts.get(q.faculty_id) || 0) + 1);
+        } else if (q.scope === 'program' && q.program_id != null) {
+            programCounts.set(q.program_id, (programCounts.get(q.program_id) || 0) + 1);
+        }
+        if (q.subject_id != null) {
+            subjectCounts.set(q.subject_id, (subjectCounts.get(q.subject_id) || 0) + 1);
+        }
+        if (q.level_id != null) {
+            levelCounts.set(q.level_id, (levelCounts.get(q.level_id) || 0) + 1);
+        }
+        const minS = q.min_semester ?? 1;
+        const maxS = q.max_semester ?? 12;
+        for (let s = 1; s <= 12; s++) {
+            if (s >= minS && s <= maxS) {
+                semesterCounts.set(s, (semesterCounts.get(s) || 0) + 1);
+            }
+        }
+    }
+
+    const toSortedRows = (m: Map<number, number>, names: Map<number, string>): SummaryRow[] =>
+        [...m.entries()]
+            .map(([id, c]) => ({ label: names.get(id) ?? `ID ${id}`, count: c }))
+            .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+
+    const levelNameById = new Map((levels || []).map((l) => [l.id, l.name]));
+
+    summary = {
+        total: rows.length,
+        active: activeCount,
+        inactive: rows.length - activeCount,
+        global: globalCount,
+        byFaculty: toSortedRows(facultyCounts, facultyNameById),
+        byProgram: toSortedRows(programCounts, programNameById),
+        bySubject: toSortedRows(subjectCounts, subjectNameById),
+        bySemester: [...semesterCounts.entries()].map(([sem, c]) => ({
+            label: `Semestre ${sem}`,
+            count: c,
+        })),
+        byLevel: toSortedRows(levelCounts, levelNameById),
+    };
+} else {
+    let query = Astro.locals.supabase
+        .from('questions')
+        .select('*, subjects(name), game_levels(name, money_value), answers(*), programs(name), faculties(name)', { count: 'exact' });
+
+    if (search) query = query.ilike('question_text', `%${search}%`);
+    if (fSubject) query = query.eq('subject_id', fSubject);
+    if (fLevel) query = query.eq('level_id', fLevel);
+
+    const { data: qData, count: qCount, error: qError } = await query
+        .order('id', { ascending: false })
+        .range(from, to);
+
+    if (qError) console.error("Error cargando preguntas:", qError);
+    questions = qData;
+    count = qCount || 0;
+    totalPages = Math.ceil(count / pageSize);
+}
+
+const listTabHref = `/dashboard/preguntas?tab=listado${search ? `&search=${encodeURIComponent(search)}` : ''}${fSubject ? `&fSubject=${fSubject}` : ''}${fLevel ? `&fLevel=${fLevel}` : ''}`;
+const resumenTabHref = '/dashboard/preguntas?tab=resumen';
+
+function scopeDetailName(q: Record<string, unknown>): string | null {
+    const scope = q.scope as string | undefined;
+    if (scope === 'faculty') {
+        const fac = q.faculties as { name?: string } | null;
+        return fac?.name ?? facultyNameById.get(q.faculty_id as number) ?? null;
+    }
+    if (scope === 'program') {
+        const prog = q.programs as { name?: string } | null;
+        return prog?.name ?? programNameById.get(q.program_id as number) ?? null;
+    }
+    return null;
+}
 ---
 
 <DashboardLayout title="Banco de Preguntas" actionResult={result}>
     <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
         <div>
             <h2 class="text-4xl font-black italic uppercase text-slate-800">Trivia Bank</h2>
-            <p class="text-slate-500 font-medium">Gestión integral de conocimiento ({count || 0} total)</p>
+            <p class="text-slate-500 font-medium">
+                Gestión integral de conocimiento ({summary?.total ?? count ?? 0} total)
+            </p>
         </div>
-        <button id="btn-nueva" class="btn btn-primary text-white font-bold px-8 shadow-lg shadow-primary/20">
-            <Icon name="lucide:plus-circle" class="w-5 h-5" /> Nueva Pregunta
-        </button>
+        {tab === 'listado' && (
+            <button id="btn-nueva" class="btn btn-primary text-white font-bold px-8 shadow-lg shadow-primary/20">
+                <Icon name="lucide:plus-circle" class="w-5 h-5" /> Nueva Pregunta
+            </button>
+        )}
     </div>
 
+    <div role="tablist" class="tabs tabs-boxed bg-white border border-base-300 shadow-sm w-full max-w-md mb-8 p-1">
+        <a href={listTabHref} role="tab" class:list={["tab tab-lg font-bold uppercase text-xs", tab === 'listado' && "tab-active"]}>
+            <Icon name="lucide:list" class="w-4 h-4 mr-1" /> Listado
+        </a>
+        <a href={resumenTabHref} role="tab" class:list={["tab tab-lg font-bold uppercase text-xs", tab === 'resumen' && "tab-active"]}>
+            <Icon name="lucide:bar-chart-3" class="w-4 h-4 mr-1" /> Resumen
+        </a>
+    </div>
+
+    {tab === 'resumen' && summary && (
+        <div class="space-y-8 mb-10" id="tab-resumen">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="bg-white rounded-2xl border border-base-300 p-5 shadow-sm">
+                    <p class="text-[10px] font-black uppercase text-slate-400">Total</p>
+                    <p class="text-3xl font-black text-slate-900">{summary.total}</p>
+                </div>
+                <div class="bg-emerald-50 rounded-2xl border border-emerald-200 p-5 shadow-sm">
+                    <p class="text-[10px] font-black uppercase text-emerald-700">Globales</p>
+                    <p class="text-3xl font-black text-emerald-900">{summary.global}</p>
+                </div>
+                <div class="bg-blue-50 rounded-2xl border border-blue-200 p-5 shadow-sm">
+                    <p class="text-[10px] font-black uppercase text-blue-700">Por programa</p>
+                    <p class="text-3xl font-black text-blue-900">{summary.byProgram.reduce((a, r) => a + r.count, 0)}</p>
+                </div>
+                <div class="bg-violet-50 rounded-2xl border border-violet-200 p-5 shadow-sm">
+                    <p class="text-[10px] font-black uppercase text-violet-700">Por facultad</p>
+                    <p class="text-3xl font-black text-violet-900">{summary.byFaculty.reduce((a, r) => a + r.count, 0)}</p>
+                </div>
+            </div>
+            <p class="text-xs text-slate-500">
+                Activas: <strong>{summary.active}</strong> · Inactivas: <strong>{summary.inactive}</strong>.
+                Por semestre: preguntas cuyo rango min–max incluye ese semestre.
+            </p>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-white rounded-2xl border border-base-300 shadow-sm overflow-hidden">
+                    <div class="px-5 py-4 bg-slate-50 border-b border-base-300">
+                        <h3 class="font-black uppercase text-sm text-slate-800 flex items-center gap-2">
+                            <Icon name="lucide:graduation-cap" class="w-4 h-4 text-primary" /> Por programa
+                        </h3>
+                    </div>
+                    {summary.byProgram.length > 0 ? (
+                        <table class="table table-sm">
+                            <thead><tr><th>Programa</th><th class="text-right">Preguntas</th></tr></thead>
+                            <tbody>
+                                {summary.byProgram.map((r) => (
+                                    <tr><td class="font-medium">{r.label}</td><td class="text-right font-bold">{r.count}</td></tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <p class="p-6 text-slate-400 text-sm italic">No hay preguntas con ámbito programa.</p>
+                    )}
+                </div>
+                <div class="bg-white rounded-2xl border border-base-300 shadow-sm overflow-hidden">
+                    <div class="px-5 py-4 bg-slate-50 border-b border-base-300">
+                        <h3 class="font-black uppercase text-sm text-slate-800 flex items-center gap-2">
+                            <Icon name="lucide:book-open" class="w-4 h-4 text-primary" /> Por asignatura
+                        </h3>
+                    </div>
+                    {summary.bySubject.length > 0 ? (
+                        <div class="max-h-72 overflow-y-auto">
+                            <table class="table table-sm">
+                                <thead><tr><th>Asignatura</th><th class="text-right">Preguntas</th></tr></thead>
+                                <tbody>
+                                    {summary.bySubject.map((r) => (
+                                        <tr><td class="font-medium">{r.label}</td><td class="text-right font-bold">{r.count}</td></tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
+                        <p class="p-6 text-slate-400 text-sm italic">Sin asignaturas vinculadas.</p>
+                    )}
+                </div>
+                <div class="bg-white rounded-2xl border border-base-300 shadow-sm overflow-hidden lg:col-span-2">
+                    <div class="px-5 py-4 bg-slate-50 border-b border-base-300">
+                        <h3 class="font-black uppercase text-sm text-slate-800 flex items-center gap-2">
+                            <Icon name="lucide:calendar-range" class="w-4 h-4 text-primary" /> Por semestre
+                        </h3>
+                    </div>
+                    <div class="p-5 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-12 gap-2">
+                        {summary.bySemester.map((r) => (
+                            <div class:list={["rounded-xl border p-3 text-center", r.count > 0 ? "bg-primary/5 border-primary/30" : "bg-slate-50 border-slate-200 opacity-60"]}>
+                                <p class="text-[9px] font-black uppercase text-slate-500">S{r.label.replace('Semestre ', '')}</p>
+                                <p class="text-xl font-black text-slate-800">{r.count}</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                {summary.byLevel.length > 0 && (
+                    <div class="bg-white rounded-2xl border border-base-300 shadow-sm overflow-hidden lg:col-span-2">
+                        <div class="px-5 py-4 bg-slate-50 border-b border-base-300">
+                            <h3 class="font-black uppercase text-sm text-slate-800 flex items-center gap-2">
+                                <Icon name="lucide:layers" class="w-4 h-4 text-primary" /> Por nivel
+                            </h3>
+                        </div>
+                        <table class="table table-sm">
+                            <thead><tr><th>Nivel</th><th class="text-right">Preguntas</th></tr></thead>
+                            <tbody>
+                                {summary.byLevel.map((r) => (
+                                    <tr><td class="font-medium">{r.label}</td><td class="text-right font-bold">{r.count}</td></tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    )}
+
+    {tab === 'listado' && (
+    <>
     <!-- BARRA DE FILTROS REALTIME (Vía GET) -->
     <form method="GET" class="grid grid-cols-1 md:grid-cols-12 gap-3 mb-8 bg-white p-4 rounded-3xl border border-base-300 shadow-sm">
+        <input type="hidden" name="tab" value="listado" />
         <div class="md:col-span-5 relative">
             <Icon name="lucide:search" class="absolute left-3 top-3 text-slate-400" />
             <input name="search" value={search} type="text" placeholder="Buscar por enunciado..." class="input input-bordered w-full pl-10 bg-base-200/50" />
@@ -79,7 +296,7 @@ const { data: allSubjects } = await Astro.locals.supabase.from('subjects').selec
         </div>
         <div class="md:col-span-2 flex gap-1">
             <button type="submit" class="btn btn-primary flex-1 text-white"><Icon name="lucide:filter" class="w-4 h-4" /></button>
-            <a href="/dashboard/preguntas" class="btn btn-ghost border border-base-300"><Icon name="lucide:rotate-ccw" class="w-4 h-4" /></a>
+            <a href={listTabHref} class="btn btn-ghost border border-base-300"><Icon name="lucide:rotate-ccw" class="w-4 h-4" /></a>
         </div>
     </form>
 
@@ -99,13 +316,27 @@ const { data: allSubjects } = await Astro.locals.supabase.from('subjects').selec
                     </tr>
                 </thead>
                 <tbody>
-                    {questions.map((q) => (
+                    {questions.map((q) => {
+                        const scopeDetail = scopeDetailName(q);
+                        return (
                         <tr class="align-top hover:bg-base-200/50">
                             <td class="max-w-xs">
                                 <p class="font-bold text-slate-800 text-sm leading-snug line-clamp-3">{q.question_text}</p>
                             </td>
                             <td>
-                                <span class="badge badge-sm badge-ghost font-bold uppercase text-[10px]">{q.scope}</span>
+                                <div class="flex flex-col gap-1 min-w-[7rem]">
+                                    <span class:list={[
+                                        "badge badge-sm font-bold uppercase text-[10px] w-fit",
+                                        q.scope === 'global' && "badge-ghost",
+                                        q.scope === 'faculty' && "badge-secondary",
+                                        q.scope === 'program' && "badge-primary badge-outline",
+                                    ]}>
+                                        {q.scope === 'global' ? 'Global' : q.scope === 'faculty' ? 'Facultad' : q.scope === 'program' ? 'Programa' : q.scope}
+                                    </span>
+                                    {scopeDetail && (
+                                        <span class="text-xs font-semibold text-slate-700 leading-tight">{scopeDetail}</span>
+                                    )}
+                                </div>
                             </td>
                             <td class="max-w-xs">
                                 <ul class="space-y-1 text-xs">
@@ -148,7 +379,8 @@ const { data: allSubjects } = await Astro.locals.supabase.from('subjects').selec
                                 </div>
                             </td>
                         </tr>
-                    ))}
+                        );
+                    })}
                 </tbody>
             </table>
         ) : (
@@ -162,20 +394,22 @@ const { data: allSubjects } = await Astro.locals.supabase.from('subjects').selec
     {totalPages > 1 && (
             <div class="flex justify-center mb-10">
                 <div class="join shadow-sm bg-white border border-base-300">
-                    <a href={`?page=${page - 1}&search=${search}&fSubject=${fSubject}&fLevel=${fLevel}`}
+                    <a href={`?tab=listado&page=${page - 1}&search=${search}&fSubject=${fSubject}&fLevel=${fLevel}`}
                        class:list={["join-item btn btn-sm", page <= 1 && "btn-disabled"]}>«</a>
 
                     {Array.from({length: totalPages}, (_, i) => i + 1).map(p => (
-                            <a href={`?page=${p}&search=${search}&fSubject=${fSubject}&fLevel=${fLevel}`}
+                            <a href={`?tab=listado&page=${p}&search=${search}&fSubject=${fSubject}&fLevel=${fLevel}`}
                                class:list={["join-item btn btn-sm", page === p ? "btn-primary text-white" : "btn-ghost"]}>
                                 {p}
                             </a>
                     ))}
 
-                    <a href={`?page=${page + 1}&search=${search}&fSubject=${fSubject}&fLevel=${fLevel}`}
+                    <a href={`?tab=listado&page=${page + 1}&search=${search}&fSubject=${fSubject}&fLevel=${fLevel}`}
                        class:list={["join-item btn btn-sm", page >= totalPages && "btn-disabled"]}>»</a>
                 </div>
             </div>
+    )}
+    </>
     )}
     <!-- MODAL DE PREGUNTA -->
     <dialog id="modal_question" class="modal">

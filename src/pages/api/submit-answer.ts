@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { assertQuestionMatchesEventScope, type EventScope } from "@/lib/questionScope";
+import { saveGameAnswerIdempotent } from "@/lib/gameAnswer";
 
 /**
  * API para enviar respuesta en preselección (game_mode_id=1).
@@ -140,27 +141,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
         });
     }
 
-    // Idempotencia: si ya respondió esta pregunta, retornar éxito sin volver a insertar
-    const { data: existingAnswer } = await supabaseAdmin
-        .from("game_answers")
-        .select("id, is_correct, money_at_question")
-        .eq("game_session_id", sessionIdNum)
-        .eq("question_id", qId)
-        .maybeSingle();
-
-    if (existingAnswer) {
-        return new Response(
-            JSON.stringify({
-                success: true,
-                correct: existingAnswer.is_correct ?? false,
-                points: existingAnswer.money_at_question ?? 0,
-                time: (responseMs / 1000).toFixed(2),
-                insertId: existingAnswer.id,
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-    }
-
     const isJuegoFinal = (roundRes.data.events as { game_mode_id?: number })?.game_mode_id === 2;
     let points = 0;
     if (isCorrect) {
@@ -188,49 +168,52 @@ export const POST: APIRoute = async ({ request, locals }) => {
         (questionRes.data?.game_levels as { id?: number })?.id ??
         1;
 
-    const { data: insertedId, error: insertErr } = await supabaseAdmin.rpc("insert_game_answer", {
-        p_game_session_id: sessionIdNum,
-        p_round_id: parseInt(round_id, 10),
-        p_event_id: roundRes.data.event_id,
-        p_player_id: playerRes.data.id,
-        p_classroom_group_id: roundRes.data.classroom_group_id ?? "",
-        p_question_id: parseInt(question_id, 10),
-        p_answer_id: parseInt(answer_id, 10),
-        p_is_correct: isCorrect,
-        p_response_time_ms: responseMs,
-        p_money_at_question: points,
-        p_level_id: typeof levelId === "number" ? levelId : parseInt(String(levelId), 10) || 1,
-    });
-
-    if (insertErr) {
-        console.error("[submit-answer] insert_game_answer falló:", insertErr);
-        return new Response(
-            JSON.stringify({ error: `Error al guardar respuesta: ${insertErr.message}` }),
-            { status: 500, headers: { "Content-Type": "application/json" } }
-        );
-    }
-
-    if (points > 0) {
-        await supabaseAdmin.rpc("registrar_puntaje_ganado", {
-            p_session_id: sessionIdNum,
-            p_event_id: roundRes.data.event_id,
-            p_player_id: playerRes.data.id,
-            p_puntos: points,
+    let saved: Awaited<ReturnType<typeof saveGameAnswerIdempotent>>;
+    try {
+        saved = await saveGameAnswerIdempotent({
+            gameSessionId: sessionIdNum,
+            roundId: parseInt(round_id, 10),
+            eventId: roundRes.data.event_id,
+            playerId: playerRes.data.id,
+            classroomGroupId: roundRes.data.classroom_group_id ?? "",
+            questionId: qId,
+            answerId: parseInt(answer_id, 10),
+            isCorrect,
+            responseTimeMs: responseMs,
+            moneyAtQuestion: points,
+            levelId: typeof levelId === "number" ? levelId : parseInt(String(levelId), 10) || 1,
+        });
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : "Error al guardar respuesta";
+        console.error("[submit-answer]", msg);
+        return new Response(JSON.stringify({ error: msg }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
         });
     }
 
-    await supabaseAdmin.rpc("add_player_time", {
-        p_player_id: playerRes.data.id,
-        p_event_id: roundRes.data.event_id,
-        p_response_ms: responseMs,
-    });
+    if (!saved.alreadyAnswered) {
+        if (points > 0) {
+            await supabaseAdmin.rpc("registrar_puntaje_ganado", {
+                p_session_id: sessionIdNum,
+                p_event_id: roundRes.data.event_id,
+                p_player_id: playerRes.data.id,
+                p_puntos: points,
+            });
+        }
+        await supabaseAdmin.rpc("add_player_time", {
+            p_player_id: playerRes.data.id,
+            p_event_id: roundRes.data.event_id,
+            p_response_ms: responseMs,
+        });
+    }
 
     const data = {
         success: true,
-        correct: isCorrect,
-        points,
+        correct: saved.isCorrect,
+        points: saved.points,
         time: (responseMs / 1000).toFixed(2),
-        insertId: insertedId ?? null,
+        insertId: saved.insertId,
     };
 
     return new Response(JSON.stringify(data), {

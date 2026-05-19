@@ -40,10 +40,11 @@ export const GET: APIRoute = async ({ locals, url }) => {
     }
 
     const roundIdNum = parseInt(roundId, 10);
+    const effectiveRoundId = Number.isFinite(roundIdNum) ? roundIdNum : parseInt(String(roundId), 10);
     const { data: round } = await supabaseAdmin
         .from("event_rounds")
-        .select("event_id, classroom_group_id, current_question_id, status, events(game_mode_id)")
-        .eq("id", isNaN(roundIdNum) ? roundId : roundIdNum)
+        .select("id, event_id, classroom_group_id, current_question_id, status, events(game_mode_id)")
+        .eq("id", effectiveRoundId)
         .single();
 
     if (!round) {
@@ -103,7 +104,7 @@ export const GET: APIRoute = async ({ locals, url }) => {
         const { data: lw } = await supabaseAdmin
             .from("round_lifeline_usage")
             .select("id")
-            .eq("round_id", parseInt(roundId, 10))
+            .eq("round_id", effectiveRoundId)
             .eq("question_id", round.current_question_id)
             .eq("lifeline_code", "last_word")
             .maybeSingle();
@@ -116,7 +117,7 @@ export const GET: APIRoute = async ({ locals, url }) => {
     const { data: sessions } = await supabaseAdmin
         .from("game_sessions")
         .select("player_id")
-        .eq("round_id", round.id)
+        .eq("round_id", effectiveRoundId)
         .eq("finished", false);
     if (sessions) sessions.forEach((s) => s.player_id && playerIds.add(s.player_id));
 
@@ -140,7 +141,7 @@ export const GET: APIRoute = async ({ locals, url }) => {
             const { data: sel } = await supabaseAdmin
                 .from("student_answer_selection")
                 .select("player_id, answer_id, players(name)")
-                .eq("round_id", parseInt(roundId, 10))
+                .eq("round_id", effectiveRoundId)
                 .eq("question_id", round.current_question_id)
                 .limit(1);
             if (sel && sel.length > 0) {

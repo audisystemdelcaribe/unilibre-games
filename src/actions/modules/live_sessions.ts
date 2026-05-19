@@ -10,6 +10,7 @@ import {
     scopeOptionsForGameMode,
     type EventScope,
 } from '../../lib/questionScope';
+import { saveGameAnswerIdempotent, markQuestionShown } from '../../lib/gameAnswer';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { ensureStaff, ensureStaffFull } from '../utils';
 
@@ -183,16 +184,38 @@ export const liveSessionsActions = {
                         .update({ finished: false, round_id: round.id, session_type: 'classroom' })
                         .eq('player_id', player.id)
                         .eq('event_id', round.event_id)
+                        .eq('finished', true)
                         .select()
-                        .single();
+                        .maybeSingle();
                     if (upErr) throw new Error("Error al crear sesión: " + sErr.message);
-                    session = updated;
+                    if (updated) {
+                        session = updated;
+                    } else {
+                        const { data: updatedActive, error: upErr2 } = await supabaseAdmin
+                            .from('game_sessions')
+                            .update({ round_id: round.id, session_type: 'classroom' })
+                            .eq('player_id', player.id)
+                            .eq('event_id', round.event_id)
+                            .eq('finished', false)
+                            .select()
+                            .single();
+                        if (upErr2) throw new Error("Error al crear sesión: " + sErr.message);
+                        session = updatedActive;
+                    }
                 } else {
                     throw new Error("Error al crear sesión: " + sErr.message);
                 }
             } else {
                 session = upserted;
             }
+
+            // Asegurar round_id correcto (por si el upsert no actualizó la fila existente)
+            await supabaseAdmin
+                .from('game_sessions')
+                .update({ round_id: round.id, finished: false, session_type: 'classroom' })
+                .eq('player_id', player.id)
+                .eq('event_id', round.event_id)
+                .eq('finished', false);
 
             // 4. REGISTRAR EN EL EVENTO (Asegurando el grupo)
             await supabaseAdmin
@@ -244,9 +267,7 @@ export const liveSessionsActions = {
                 throw new Error("Esta pregunta no pertenece al programa o ámbito de este evento.");
             }
 
-            try {
-                await supabaseAdmin.from('round_questions_shown').insert({ round_id: rId, question_id: qId });
-            } catch (_) { /* tabla puede no existir */ }
+            await markQuestionShown(rId, qId);
             const { error } = await supabaseAdmin
                 .from('event_rounds')
                 .update({
@@ -344,56 +365,45 @@ export const liveSessionsActions = {
                 stage: 'playing'
             }, { onConflict: 'event_id, player_id' });
 
-            // Insertar vía RPC SECURITY DEFINER (bypasea RLS sin depender de la clave)
             const levelId = (questionRes.data as any)?.level_id ?? (questionRes.data?.game_levels as any)?.id ?? 1;
-            const rpcParams = {
-                p_game_session_id: sessionIdNum,
-                p_round_id: parseInt(round_id, 10),
-                p_event_id: roundRes.data.event_id,
-                p_player_id: playerRes.data.id,
-                p_classroom_group_id: roundRes.data.classroom_group_id ?? '',
-                p_question_id: parseInt(question_id, 10),
-                p_answer_id: parseInt(answer_id, 10),
-                p_is_correct: isCorrect,
-                p_response_time_ms: responseMs,
-                p_money_at_question: points,
-                p_level_id: typeof levelId === 'number' ? levelId : parseInt(String(levelId), 10) || 1
-            };
-            console.log('[submitAnswer] Llamando insert_game_answer con:', JSON.stringify(rpcParams));
-            const { data: insertedId, error: insertErr } = await supabaseAdmin.rpc('insert_game_answer', {
-                ...rpcParams
+            const saved = await saveGameAnswerIdempotent({
+                gameSessionId: sessionIdNum,
+                roundId: parseInt(round_id, 10),
+                eventId: roundRes.data.event_id,
+                playerId: playerRes.data.id,
+                classroomGroupId: roundRes.data.classroom_group_id ?? '',
+                questionId: parseInt(question_id, 10),
+                answerId: parseInt(answer_id, 10),
+                isCorrect,
+                responseTimeMs: responseMs,
+                moneyAtQuestion: points,
+                levelId: typeof levelId === 'number' ? levelId : parseInt(String(levelId), 10) || 1,
             });
 
-            if (insertErr) {
-                console.error('[submitAnswer] insert_game_answer FALLÓ:', {
-                    message: insertErr.message,
-                    details: insertErr.details,
-                    code: insertErr.code,
-                    hint: insertErr.hint
-                });
-                throw new Error(`Error al guardar respuesta: ${insertErr.message}`);
-            }
-            console.log('[submitAnswer] Respuesta guardada OK, id:', insertedId);
-
-            // 3. LLAMAR A LA FUNCIÓN DE PUNTOS (Lo más importante)
-            if (points > 0) {
-                await supabaseAdmin.rpc('registrar_puntaje_ganado', {
-                    p_session_id: sessionIdNum,
-                    p_event_id: roundRes.data.event_id,
+            if (!saved.alreadyAnswered) {
+                if (points > 0) {
+                    await supabaseAdmin.rpc('registrar_puntaje_ganado', {
+                        p_session_id: sessionIdNum,
+                        p_event_id: roundRes.data.event_id,
+                        p_player_id: playerRes.data.id,
+                        p_puntos: points,
+                    });
+                }
+                const { error: timeErr } = await supabaseAdmin.rpc('add_player_time', {
                     p_player_id: playerRes.data.id,
-                    p_puntos: points
+                    p_event_id: roundRes.data.event_id,
+                    p_response_ms: responseMs,
                 });
+                if (timeErr) console.error('add_player_time:', timeErr.message);
             }
 
-            // 4. Acumular tiempo total (para desempate y transparencia en ranking)
-            const { error: timeErr } = await supabaseAdmin.rpc('add_player_time', {
-                p_player_id: playerRes.data.id,
-                p_event_id: roundRes.data.event_id,
-                p_response_ms: responseMs
-            });
-            if (timeErr) console.error('add_player_time:', timeErr.message);
-
-            const resp = { success: true, correct: isCorrect, points, time: (responseMs / 1000).toFixed(2), insertId: insertedId ?? null };
+            const resp = {
+                success: true,
+                correct: saved.isCorrect,
+                points: saved.points,
+                time: (responseMs / 1000).toFixed(2),
+                insertId: saved.insertId,
+            };
             console.log('[submitAnswer] ÉXITO - retornando:', resp);
             return resp;
         }
@@ -573,13 +583,7 @@ export const liveSessionsActions = {
 
             if (!randomQ) throw new Error("Error al seleccionar pregunta");
 
-            // Registrar que esta pregunta ya se mostró (evita repeticiones)
-            try {
-                await supabaseAdmin.from('round_questions_shown').insert({
-                    round_id: round.id,
-                    question_id: randomQ.id
-                });
-            } catch (_) { /* tabla puede no existir aún */ }
+            await markQuestionShown(round.id, randomQ.id);
 
             // Actualizar stage a 'playing' cuando inicia el juego (desde waiting)
             await supabaseAdmin.from('event_players').update({ stage: 'playing' })
@@ -685,7 +689,7 @@ export const liveSessionsActions = {
                 const chosenId = availableIds[Math.floor(Math.random() * availableIds.length)];
                 const { data: verifyQ } = await supabaseAdmin.from('questions').select('level_id').eq('id', chosenId).single();
                 if (!verifyQ || verifyQ.level_id !== nextLevelId) throw new Error("Error al seleccionar pregunta del nivel correcto.");
-                await supabaseAdmin.from('round_questions_shown').insert({ round_id: rId, question_id: chosenId });
+                await markQuestionShown(rId, chosenId);
                 await supabaseAdmin.from('event_rounds').update({ current_question_id: chosenId, question_started_at: new Date().toISOString(), verification_result: verificationResult }).eq('id', rId);
                 return { success: true, message: "¡Correcto! Siguiente nivel." };
             } else {
@@ -876,7 +880,7 @@ export const liveSessionsActions = {
                     console.error('[evaluateClasico] Nivel incoherente: chosenId=', chosenId, 'expected level=', nextLevelId, 'got=', verifyQ?.level_id);
                     throw new Error("Error al seleccionar pregunta del nivel correcto. Intenta de nuevo.");
                 }
-                await supabaseAdmin.from('round_questions_shown').insert({ round_id: rId, question_id: chosenId });
+                await markQuestionShown(rId, chosenId);
                 await supabaseAdmin.from('event_rounds').update({
                     current_question_id: chosenId,
                     question_started_at: new Date().toISOString(),
