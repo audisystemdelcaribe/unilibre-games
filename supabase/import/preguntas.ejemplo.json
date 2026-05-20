@@ -1,0 +1,33 @@
+{
+  "questions": [
+    {
+      "question_text": "¿Cuál es la capital de Colombia?",
+      "subject_name": "Geografía",
+      "level_name": "Nivel 1",
+      "scope": "global",
+      "min_semester": 1,
+      "max_semester": 10,
+      "answers": [
+        { "text": "Bogotá", "correct": true },
+        { "text": "Medellín", "correct": false },
+        { "text": "Cali", "correct": false },
+        { "text": "Barranquilla", "correct": false }
+      ]
+    },
+    {
+      "question_text": "¿En qué año se fundó la Universidad Libre?",
+      "subject_name": "Historia institucional",
+      "level_name": "Nivel 1",
+      "scope": "faculty",
+      "faculty_name": "Facultad de Ingeniería",
+      "min_semester": 3,
+      "max_semester": 8,
+      "answers": [
+        { "text": "1922", "correct": true },
+        { "text": "1900", "correct": false },
+        { "text": "1950", "correct": false },
+        { "text": "1880", "correct": false }
+      ]
+    }
+  ]
+}

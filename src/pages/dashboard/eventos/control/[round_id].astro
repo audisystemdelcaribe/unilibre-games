@@ -6,6 +6,7 @@ import FormButton from "@/components/FormButton.astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { loadClasicoCurrentQuestion, type ClasicoAnswerOption } from "@/lib/clasicoQuestionView";
 import { loadFastestFingerAttempts } from "@/lib/fastestFingerResults";
+import { seededShuffle } from "@/lib/utils";
 
 const { round_id } = Astro.params;
 const user = await Astro.locals.getUser();
@@ -28,6 +29,35 @@ const { data: ffRound } = await supabaseAdmin
     .select('*, fastest_finger_sequences(title)')
     .eq('event_round_id', roundIdNum)
     .maybeSingle();
+
+/** Reto activo de Mente más Rápida (título + ítems mezclados, sin orden correcto). */
+let fastestFingerChallenge: { title: string; items: { text: string }[] } | null = null;
+if (ffRound?.sequence_id) {
+    let challengeTitle =
+        (ffRound.fastest_finger_sequences as { title?: string } | null)?.title ?? '';
+    if (!challengeTitle) {
+        const { data: seqRow } = await supabaseAdmin
+            .from('fastest_finger_sequences')
+            .select('title')
+            .eq('id', ffRound.sequence_id)
+            .maybeSingle();
+        challengeTitle = seqRow?.title ?? '';
+    }
+    const { data: ffItems } = await supabaseAdmin
+        .from('fastest_finger_items')
+        .select('text')
+        .eq('sequence_id', ffRound.sequence_id);
+    if (ffItems?.length) {
+        const shuffled = seededShuffle(
+            ffItems.map((it) => ({ text: it.text })),
+            roundIdNum * 31 + Number(ffRound.sequence_id)
+        );
+        fastestFingerChallenge = {
+            title: challengeTitle || 'Reto de ordenamiento',
+            items: shuffled,
+        };
+    }
+}
 
 const gameModeId = round?.events?.game_mode_id;
 // Rol preseleccion: solo puede controlar rondas de Preselección
@@ -348,7 +378,29 @@ if (confirmResult?.data?.clasico_round_id) {
                                     </div>
                             ) : isFastestFinger ? (
                                     <div>
-                                        <h1 class="text-2xl font-bold italic text-yellow-400 mb-6">Mente más Rápida — Resultados</h1>
+                                        <h1 class="text-2xl font-bold italic text-yellow-400 mb-4">Mente más Rápida — Resultados</h1>
+                                        {fastestFingerChallenge ? (
+                                            <div class="mb-6 p-5 bg-white/5 border border-yellow-500/40 rounded-2xl text-left max-w-3xl">
+                                                <p class="text-[10px] text-yellow-400 uppercase font-black mb-1">Vista docente — reto activo</p>
+                                                <p class="text-xs text-zinc-500 mb-3">
+                                                    Solo el enunciado y los ítems del reto. No se muestra el orden correcto.
+                                                </p>
+                                                <h2 class="text-xl md:text-2xl font-black italic text-white mb-4 leading-snug">
+                                                    {fastestFingerChallenge.title}
+                                                </h2>
+                                                <ul class="space-y-2">
+                                                    {fastestFingerChallenge.items.map((item) => (
+                                                        <li class="p-3 rounded-xl border bg-zinc-800/50 border-white/10 text-zinc-200 text-sm font-medium">
+                                                            <span class="min-w-0">{item.text}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        ) : (
+                                            <p class="text-zinc-500 text-sm mb-4 italic">
+                                                No se pudo cargar el reto. Verifica que la secuencia tenga ítems en Mente más Rápida.
+                                            </p>
+                                        )}
                                         <p class="text-zinc-500 text-sm mb-2">Se espera a que respondan. El ganador es quien acierta correctamente en menos tiempo.</p>
                                         <p class="text-zinc-500 text-sm mb-6">Revisa los resultados y confirma al ganador para pasar a Silla Caliente.</p>
                                         {round?.session_pin && (
