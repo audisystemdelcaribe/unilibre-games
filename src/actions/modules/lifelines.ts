@@ -122,23 +122,22 @@ export const lifelinesActions = {
             if (shown?.length) usedIds = shown.map((s: { question_id: number }) => s.question_id).filter(Boolean);
             usedIds.push(qId);
 
-            // Silla Caliente: filtrar por semestre del concursante activo
-            let playerSemester: number | null = null;
             const gameModeId = (round.events as { game_mode_id?: number })?.game_mode_id;
-            if (gameModeId === 2) {
-                const { data: ac } = await supabaseAdmin.from('active_contestants').select('player_id').eq('event_id', round.event_id).maybeSingle();
-                if (ac?.player_id) {
-                    const { data: pl } = await supabaseAdmin.from('players').select('semester').eq('id', ac.player_id).single();
-                    if (pl?.semester != null) playerSemester = pl.semester;
-                }
-            }
+            let availableIds: number[];
 
-            let query = supabaseAdmin.from('questions').select('id, scope, program_id, faculty_id').eq('level_id', currentQ.level_id).eq('active', true);
-            query = applyScopeFilter(query, round.events as EventScope);
-            if (playerSemester != null) query = query.lte('min_semester', playerSemester).gte('max_semester', playerSemester);
-            const { data: available } = await query;
-            const scoped = filterQuestionsByEventScope(available || [], round.events as EventScope);
-            const availableIds = scoped.map((q) => q.id).filter((id: number) => !usedIds.includes(id));
+            if (gameModeId === 2) {
+                const { loadClasicoContestant, fetchClasicoQuestionIds } = await import('../../lib/clasicoQuestionFilters');
+                const contestant = await loadClasicoContestant(supabaseAdmin, round.event_id);
+                availableIds = contestant
+                    ? await fetchClasicoQuestionIds(supabaseAdmin, contestant, currentQ.level_id, usedIds)
+                    : [];
+            } else {
+                let query = supabaseAdmin.from('questions').select('id, scope, program_id, faculty_id').eq('level_id', currentQ.level_id).eq('active', true);
+                query = applyScopeFilter(query, round.events as EventScope);
+                const { data: available } = await query;
+                const scoped = filterQuestionsByEventScope(available || [], round.events as EventScope);
+                availableIds = scoped.map((q) => q.id).filter((id: number) => !usedIds.includes(id));
+            }
 
             if (availableIds.length === 0) throw new Error("No hay más preguntas de este nivel disponibles.");
 

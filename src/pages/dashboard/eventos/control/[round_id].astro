@@ -4,6 +4,8 @@ import { Icon } from 'astro-icon/components';
 import { actions } from "astro:actions";
 import FormButton from "@/components/FormButton.astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { loadClasicoCurrentQuestion, type ClasicoAnswerOption } from "@/lib/clasicoQuestionView";
+import { loadFastestFingerAttempts } from "@/lib/fastestFingerResults";
 
 const { round_id } = Astro.params;
 const user = await Astro.locals.getUser();
@@ -24,7 +26,7 @@ const { data: round } = await Astro.locals.supabase
 const { data: ffRound } = await supabaseAdmin
     .from('fastest_finger_rounds')
     .select('*, fastest_finger_sequences(title)')
-    .eq('event_round_id', round_id)
+    .eq('event_round_id', roundIdNum)
     .maybeSingle();
 
 const gameModeId = round?.events?.game_mode_id;
@@ -44,13 +46,33 @@ if (gameModeId === 2) {
 
 let qText = "Cargando...";
 let currentLevel: { id: number; name: string; money_value: number; difficulty_order: number; is_safe_level: boolean } | null = null;
+let clasicoQuestionAnswers: ClasicoAnswerOption[] = [];
 // No cargar pregunta de preselección cuando estamos en Mente más Rápida (round.current_question_id es de otra fase)
 if (round?.current_question_id && round?.status !== 'fastest_finger') {
-    const { data: q } = await Astro.locals.supabase.from('questions').select('question_text, level_id').eq('id', round.current_question_id).single();
-    qText = q?.question_text || qText;
-    if (q?.level_id && gameModeId === 2) {
-        const { data: lvl } = await Astro.locals.supabase.from('game_levels').select('id, name, money_value, difficulty_order, is_safe_level').eq('id', q.level_id).single();
-        currentLevel = lvl;
+    if (gameModeId === 2) {
+        const cq = await loadClasicoCurrentQuestion(supabaseAdmin, roundIdNum, round.current_question_id);
+        if (cq) {
+            qText = cq.question_text;
+            clasicoQuestionAnswers = cq.answers;
+            if (cq.level_id) {
+                const { data: lvl } = await supabaseAdmin
+                    .from('game_levels')
+                    .select('id, name, money_value, difficulty_order, is_safe_level')
+                    .eq('id', cq.level_id)
+                    .maybeSingle();
+                currentLevel = lvl;
+            }
+        }
+    } else {
+        const { data: q } = await Astro.locals.supabase.from('questions').select('question_text, level_id').eq('id', round.current_question_id).single();
+        qText = q?.question_text || qText;
+    }
+    if (!currentLevel && gameModeId === 2 && round.current_question_id) {
+        const { data: q } = await supabaseAdmin.from('questions').select('level_id').eq('id', round.current_question_id).single();
+        if (q?.level_id) {
+            const { data: lvl } = await supabaseAdmin.from('game_levels').select('id, name, money_value, difficulty_order, is_safe_level').eq('id', q.level_id).single();
+            currentLevel = lvl;
+        }
     }
 }
 
@@ -174,16 +196,8 @@ if (round && !isClasico) {
     }
 }
 if (round?.status === "fastest_finger") {
-    const { data: ffRound } = await supabaseAdmin.from("fastest_finger_rounds").select("id").eq("event_round_id", parseInt(String(round_id), 10)).maybeSingle();
-    if (ffRound) {
-        const { data: attempts } = await supabaseAdmin.from("fastest_finger_attempts").select("player_id, response_time_ms, is_correct, players(name)").eq("fastest_finger_round_id", ffRound.id);
-        initialFastestAttempts = (attempts || []).map((a: { player_id: number; response_time_ms: number; is_correct: boolean; players?: { name?: string } }) => ({
-            player_id: a.player_id,
-            name: (a.players as { name?: string })?.name || "Estudiante",
-            response_time_ms: a.response_time_ms ?? 0,
-            is_correct: a.is_correct ?? false,
-        }));
-    }
+    const { attempts } = await loadFastestFingerAttempts(supabaseAdmin, roundIdNum);
+    initialFastestAttempts = attempts;
 }
 
 const result = Astro.getActionResult(actions.launchRandomQuestion) || Astro.getActionResult(actions.finishRound) || Astro.getActionResult(actions.launchFastestFinger) || Astro.getActionResult(actions.confirmWinner) || Astro.getActionResult(actions.useLifeline5050) || Astro.getActionResult(actions.useLifelineCambiarPregunta) || Astro.getActionResult(actions.useLifelineLlamada) || Astro.getActionResult(actions.useLifelinePublico) || Astro.getActionResult(actions.useLastWord) || Astro.getActionResult(actions.verifyClasicoAnswer);
@@ -403,6 +417,37 @@ if (confirmResult?.data?.clasico_round_id) {
                                             </div>
                                         )}
                                         <h1 class:list={["font-bold italic", isClasico ? "text-4xl md:text-5xl lg:text-6xl" : "text-3xl"]} id="question-text">{qText}</h1>
+                                        {isClasico && isActive && (
+                                            <div id="clasico-answers-panel" class="mt-6 p-5 bg-white/5 border border-emerald-500/30 rounded-2xl text-left max-w-3xl mx-auto">
+                                                <p class="text-[10px] text-emerald-400 uppercase font-black mb-1">Vista docente</p>
+                                                <p class="text-xs text-zinc-500 mb-4">Opciones en el mismo orden que ve el concursante. La correcta solo la ves tú.</p>
+                                                {clasicoQuestionAnswers.length > 0 ? (
+                                                    <ul id="clasico-answers-list" class="space-y-2">
+                                                        {clasicoQuestionAnswers.map((a) => (
+                                                            <li
+                                                                class:list={[
+                                                                    "p-3 rounded-xl border text-sm font-medium flex flex-wrap items-center gap-2",
+                                                                    a.is_correct
+                                                                        ? "bg-emerald-500/20 border-emerald-400/60 text-emerald-100"
+                                                                        : "bg-zinc-800/50 border-white/10 text-zinc-300",
+                                                                ]}
+                                                                data-answer-id={a.id}
+                                                            >
+                                                                <span class="font-black text-lg w-8">{a.letter}.</span>
+                                                                <span class="flex-1 min-w-[12rem]">{a.answer_text}</span>
+                                                                {a.is_correct && (
+                                                                    <span class="badge badge-success badge-sm font-black uppercase text-[9px]">
+                                                                        Correcta
+                                                                    </span>
+                                                                )}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p id="clasico-answers-empty" class="text-zinc-500 text-sm italic">Lanza una pregunta para ver las opciones.</p>
+                                                )}
+                                            </div>
+                                        )}
                                         {!isClasico && (
                                         <div class="mt-8 flex gap-4">
                                             <div class="bg-white/5 p-4 rounded-2xl border border-white/10 flex-1 text-center">
@@ -573,6 +618,13 @@ if (confirmResult?.data?.clasico_round_id) {
                                         ))}
                                     </div>
                                 )}
+                                {isFastestFinger && (
+                                    <div id="ff-sidebar-attempts" class="space-y-2 mt-2">
+                                        {initialFastestAttempts.length === 0 && (
+                                            <p class="text-zinc-400 text-xs text-center py-2">Sin respuestas aún</p>
+                                        )}
+                                    </div>
+                                )}
                                 {isActive && <div id="responders-list" class="space-y-2 mt-2"></div>}
                             </div>
                         </div>
@@ -582,7 +634,7 @@ if (confirmResult?.data?.clasico_round_id) {
     </div>
 </DashboardLayout>
 
-<script is:inline define:vars={{ round, roundId: round_id, isWaiting, isActive, isFinished, isClasico, isFastestFinger, initialConnected }}>
+<script is:inline define:vars={{ round, roundId: round_id, isWaiting, isActive, isFinished, isClasico, isFastestFinger, initialConnected, ffRoundId: ffRound?.id ?? null }}>
     let procesados = new Set(Array.isArray(initialConnected) ? initialConnected.map(p => String(p.player_id)) : []);
     let respondidosProcesados = new Set();
     let lastQuestionId = round?.current_question_id ?? null;
@@ -634,7 +686,7 @@ if (confirmResult?.data?.clasico_round_id) {
 
             // 1. CONECTADOS (Lobby / participantes) - no en Clásico; mostrar siempre que haya panel
             if (data.connected && !isClasico) {
-                const toAdd: { player_id: string; name: string }[] = [];
+                const toAdd = [];
                 data.connected.forEach(a => {
                     const pid = String(a.player_id);
                     if (!procesados.has(pid)) {
@@ -694,7 +746,45 @@ if (confirmResult?.data?.clasico_round_id) {
                 }
             }
 
-            // 2b. CLÁSICO: selección del estudiante (marcó opción)
+            // 2b. CLÁSICO: pregunta y opciones (vista docente)
+            if (isClasico && isActive && data.current_question) {
+                const qEl = document.getElementById('question-text');
+                if (qEl) qEl.textContent = data.current_question.question_text || qEl.textContent;
+                const list = document.getElementById('clasico-answers-list');
+                const panel = document.getElementById('clasico-answers-panel');
+                const empty = document.getElementById('clasico-answers-empty');
+                if (panel) panel.classList.remove('hidden');
+                if (data.current_question.answers?.length && list) {
+                    if (empty) empty.classList.add('hidden');
+                    list.innerHTML = '';
+                    data.current_question.answers.forEach(function(a) {
+                        const li = document.createElement('li');
+                        li.className = 'p-3 rounded-xl border text-sm font-medium flex flex-wrap items-center gap-2 ' +
+                            (a.is_correct ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-100' : 'bg-zinc-800/50 border-white/10 text-zinc-300');
+                        li.dataset.answerId = String(a.id);
+                        const letter = document.createElement('span');
+                        letter.className = 'font-black text-lg w-8';
+                        letter.textContent = a.letter + '.';
+                        const text = document.createElement('span');
+                        text.className = 'flex-1 min-w-[12rem]';
+                        text.textContent = a.answer_text || '';
+                        li.appendChild(letter);
+                        li.appendChild(text);
+                        if (a.is_correct) {
+                            const badge = document.createElement('span');
+                            badge.className = 'badge badge-success badge-sm font-black uppercase text-[9px]';
+                            badge.textContent = 'Correcta';
+                            li.appendChild(badge);
+                        }
+                        list.appendChild(li);
+                    });
+                } else if (empty) {
+                    empty.classList.remove('hidden');
+                    if (list) list.innerHTML = '';
+                }
+            }
+
+            // 2c. CLÁSICO: selección del estudiante (marcó opción)
             if (isClasico && data.student_selection) {
                 const box = document.getElementById('student-selection-box');
                 const text = document.getElementById('student-selection-text');
@@ -712,37 +802,53 @@ if (confirmResult?.data?.clasico_round_id) {
                 }
             }
 
-            // 3. MENTE MÁS RÁPIDA: intentos, tiempo (puntos) y ganador
-            if (data.status === 'fastest_finger' && data.fastest_finger_attempts) {
+            // 3. MENTE MÁS RÁPIDA: intentos, tiempo y ganador provisional
+            if (data.status === 'fastest_finger' || isFastestFinger) {
+                const ffAttempts = data.fastest_finger_attempts || [];
                 const countEl = document.getElementById('answered-count');
                 const attemptsList = document.getElementById('ff-attempts-list');
+                const sidebarAttempts = document.getElementById('ff-sidebar-attempts');
                 const winnerBox = document.getElementById('ff-winner-box');
                 const winnerName = document.getElementById('ff-winner-name');
                 const winnerTime = document.getElementById('ff-winner-time');
                 const winnerPlayerId = document.getElementById('ff-winner-player-id');
-                if (countEl) countEl.innerText = String(data.fastest_finger_attempts.length);
-                const correct = data.fastest_finger_attempts.filter(a => a.is_correct).sort((a,b) => (a.response_time_ms || 0) - (b.response_time_ms || 0));
+                if (countEl) countEl.innerText = String(ffAttempts.length);
+                const correct = ffAttempts.filter(a => a.is_correct).sort((a,b) => (a.response_time_ms || 0) - (b.response_time_ms || 0));
                 const minTime = correct.length > 0 ? correct[0].response_time_ms : null;
                 const fastestCorrectIds = new Set(correct.filter(c => c.response_time_ms === minTime).map(c => c.player_id));
+                function renderFfRow(a, isDark) {
+                    const div = document.createElement('div');
+                    const isFastestCorrect = a.is_correct && fastestCorrectIds.has(a.player_id);
+                    div.className = isDark
+                        ? `p-3 rounded-xl text-xs font-bold flex justify-between items-center ${isFastestCorrect ? 'bg-amber-500/30 text-amber-100 border-2 border-amber-400' : a.is_correct ? 'bg-green-500/20 text-green-400' : 'bg-red-500/10 text-red-400'}`
+                        : `p-2 rounded-lg text-[10px] font-bold flex justify-between items-center ${isFastestCorrect ? 'bg-amber-100 text-amber-900 border border-amber-400' : a.is_correct ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`;
+                    const s1 = document.createElement('span');
+                    s1.textContent = (a.name || 'Estudiante') + (isFastestCorrect ? ' 🏆' : '');
+                    const s2 = document.createElement('span');
+                    const timeSec = (a.response_time_ms != null && a.response_time_ms >= 0) ? (a.response_time_ms / 1000).toFixed(2) + 's' : '—';
+                    s2.textContent = timeSec + ' ' + (a.is_correct ? '✓' : '✗');
+                    div.appendChild(s1);
+                    div.appendChild(s2);
+                    return div;
+                }
                 if (attemptsList) {
                     attemptsList.innerHTML = '';
-                    data.fastest_finger_attempts.forEach(a => {
-                        const div = document.createElement('div');
-                        const isFastestCorrect = a.is_correct && fastestCorrectIds.has(a.player_id);
-                        div.className = `p-3 rounded-xl text-xs font-bold flex justify-between items-center ${isFastestCorrect ? 'bg-amber-500/30 text-amber-100 border-2 border-amber-400' : a.is_correct ? 'bg-green-500/20 text-green-400' : 'bg-red-500/10 text-red-400'}`;
-                        const s1 = document.createElement('span');
-                        s1.textContent = (a.name || 'Estudiante') + (isFastestCorrect ? ' 🏆' : '');
-                        const s2 = document.createElement('span');
-                        const timeSec = (a.response_time_ms != null) ? (a.response_time_ms / 1000).toFixed(2) + 's' : '—';
-                        s2.textContent = timeSec + ' ' + (a.is_correct ? '✓' : '✗');
-                        div.appendChild(s1);
-                        div.appendChild(s2);
-                        attemptsList.appendChild(div);
-                    });
+                    ffAttempts.forEach(a => attemptsList.appendChild(renderFfRow(a, true)));
+                }
+                if (sidebarAttempts) {
+                    sidebarAttempts.innerHTML = '';
+                    if (ffAttempts.length === 0) {
+                        const p = document.createElement('p');
+                        p.className = 'text-zinc-400 text-xs text-center py-2';
+                        p.textContent = 'Sin respuestas aún';
+                        sidebarAttempts.appendChild(p);
+                    } else {
+                        ffAttempts.forEach(a => sidebarAttempts.appendChild(renderFfRow(a, false)));
+                    }
                 }
                 const noWinnerBox = document.getElementById('ff-no-winner-box');
                 const waitingBox = document.getElementById('ff-waiting-box');
-                const roundIdInput = document.getElementById('ff-winner-round-id') as HTMLInputElement | null;
+                const roundIdInput = document.getElementById('ff-winner-round-id');
                 if (correct.length > 0 && winnerBox && winnerName && winnerPlayerId) {
                     winnerBox.classList.remove('hidden');
                     winnerName.textContent = correct[0].name || 'Estudiante';
@@ -751,7 +857,7 @@ if (confirmResult?.data?.clasico_round_id) {
                     if (roundIdInput) roundIdInput.value = String(roundId || round?.id || '');
                     if (noWinnerBox) noWinnerBox.classList.add('hidden');
                     if (waitingBox) waitingBox.classList.add('hidden');
-                } else if (data.fastest_finger_attempts.length > 0 && noWinnerBox) {
+                } else if (ffAttempts.length > 0 && noWinnerBox) {
                     noWinnerBox.classList.remove('hidden');
                     if (winnerBox) winnerBox.classList.add('hidden');
                     if (waitingBox) waitingBox.classList.add('hidden');
@@ -809,15 +915,17 @@ if (confirmResult?.data?.clasico_round_id) {
 
     // Botón Confirmar ganador → Silla Caliente (delegación para que siempre funcione)
     document.body.addEventListener('click', async function(ev) {
-        const btn = (ev.target as Element)?.id === 'ff-confirm-winner-btn' ? (ev.target as HTMLButtonElement) : (ev.target as Element)?.closest('#ff-confirm-winner-btn') as HTMLButtonElement | null;
+        var target = ev.target;
+        if (!target || !target.closest) return;
+        var btn = target.id === 'ff-confirm-winner-btn' ? target : target.closest('#ff-confirm-winner-btn');
         if (!btn) return;
         ev.preventDefault();
         if (!confirm('¿Confirmar ganador y pasar a Silla Caliente?')) return;
         const winnerBox = document.getElementById('ff-winner-box');
-        const roundInput = (winnerBox?.querySelector('input[id="ff-winner-round-id"]') || document.getElementById('ff-winner-round-id')) as HTMLInputElement | null;
-        const playerInput = (winnerBox?.querySelector('input[id="ff-winner-player-id"]') || document.getElementById('ff-winner-player-id')) as HTMLInputElement | null;
-        let roundId = roundInput?.value?.trim() || '';
-        const playerId = playerInput?.value?.trim() || '';
+        const roundInput = (winnerBox && winnerBox.querySelector('input[id="ff-winner-round-id"]')) || document.getElementById('ff-winner-round-id');
+        const playerInput = (winnerBox && winnerBox.querySelector('input[id="ff-winner-player-id"]')) || document.getElementById('ff-winner-player-id');
+        let roundId = roundInput && roundInput.value ? String(roundInput.value).trim() : '';
+        const playerId = playerInput && playerInput.value ? String(playerInput.value).trim() : '';
         if (!roundId) {
             const m = window.location.pathname.match(/\/control\/(\d+)/);
             if (m) roundId = m[1];
@@ -835,7 +943,7 @@ if (confirmResult?.data?.clasico_round_id) {
                 body: JSON.stringify({ round_id: String(roundId), player_id: String(playerId) }),
                 credentials: 'same-origin'
             });
-            let data: { clasico_round_id?: number; error?: string } = {};
+            let data = {};
             try {
                 data = await res.json();
             } catch (_) {
@@ -887,11 +995,44 @@ if (confirmResult?.data?.clasico_round_id) {
                         div.innerText = name;
                         grid.appendChild(div);
                     }
+                    sync();
                 })
                 .subscribe();
 
-            // Cleanup al salir
-            window.addEventListener('beforeunload', () => {
+            if (isFastestFinger && ffRoundId) {
+                window.supabaseClient
+                    .channel('ff-attempts-' + ffRoundId)
+                    .on('postgres_changes', {
+                        event: 'INSERT',
+                        schema: 'public',
+                        table: 'fastest_finger_attempts',
+                        filter: 'fastest_finger_round_id=eq.' + ffRoundId
+                    }, function() { sync(); })
+                    .on('postgres_changes', {
+                        event: 'UPDATE',
+                        schema: 'public',
+                        table: 'fastest_finger_attempts',
+                        filter: 'fastest_finger_round_id=eq.' + ffRoundId
+                    }, function() { sync(); })
+                    .subscribe();
+            }
+
+            window.supabaseClient
+                .channel('round-status-' + rtRoundId)
+                .on('postgres_changes', {
+                    event: 'UPDATE',
+                    schema: 'public',
+                    table: 'event_rounds',
+                    filter: 'id=eq.' + rtRoundId
+                }, function(payload) {
+                    var newStatus = payload.new && payload.new.status;
+                    if (newStatus && newStatus !== round.status) {
+                        window.location.reload();
+                    }
+                })
+                .subscribe();
+
+            window.addEventListener('beforeunload', function() {
                 lobbyChannel.unsubscribe();
             });
         }

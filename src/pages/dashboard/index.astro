@@ -1,5 +1,6 @@
 ---
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { Icon } from "astro-icon/components";
 
 const user = await Astro.locals.getUser();
 const { data: profile } = await Astro.locals.supabase
@@ -7,9 +8,26 @@ const { data: profile } = await Astro.locals.supabase
     .select('*')
     .eq('auth_user_id', user?.id)
     .single();
+
+const isDocente = profile?.role === 'docente';
 ---
 
 <DashboardLayout title="Inicio">
+    {isDocente && (
+        <a
+            href="/dashboard/preguntas"
+            class="mb-6 flex items-center gap-4 p-6 bg-primary/10 border border-primary/30 rounded-2xl hover:bg-primary/15 transition-colors"
+        >
+            <div class="w-12 h-12 rounded-xl bg-primary text-white flex items-center justify-center">
+                <Icon name="lucide:circle-help" class="w-6 h-6" />
+            </div>
+            <div>
+                <p class="font-black uppercase text-sm text-slate-800">Banco de Preguntas</p>
+                <p class="text-sm text-slate-600">Ver, crear y editar preguntas del juego</p>
+            </div>
+        </a>
+    )}
+
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div class="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200">
             <h3 class="text-zinc-500 text-xs font-bold uppercase mb-4">Puntaje Actual</h3>

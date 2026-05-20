@@ -17,6 +17,9 @@ pnpm-debug.log*
 .env
 .env.production
 
+# database exports (pueden contener datos sensibles)
+supabase/backup/
+
 # macOS-specific files
 .DS_Store
 

@@ -86,7 +86,7 @@ function shuffle<T>(arr: T[]): T[] {
 }
 const rawItems = ffRound.fastest_finger_items ?? [];
 const items = shuffle(Array.isArray(rawItems) ? rawItems : []);
-const startTime = round.question_started_at || new Date().toISOString();
+const startTime = ffRound.started_at || round.question_started_at || new Date().toISOString();
 const questionTitle = (ffRound.fastest_finger_sequences as { title?: string } | null)?.title ?? 'Ordena los ítems en el orden correcto';
 
 const submitError = Astro.url.searchParams.get('error');
@@ -237,14 +237,20 @@ const submitError = Astro.url.searchParams.get('error');
                                 snd.play().catch(function() {});
                             } catch (e) {}
                             form.remove();
+                            var timeSec = data.time || (data.response_time_ms != null ? (data.response_time_ms / 1000).toFixed(2) : null);
                             var resultHtml;
                             if (data.correct) {
                                 resultHtml = '<div class="text-center animate-in zoom-in" id="ff-result-box">' +
                                     '<div class="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6 bg-success">' +
                                     '<span class="text-4xl">✓</span></div>' +
                                     '<h2 class="text-3xl font-black uppercase">¡Correcto!</h2>' +
-                                    '<p class="text-zinc-400 mt-2">Tiempo: ' + data.time + 's</p>' +
-                                    '<p id="ff-winner-msg" class="text-zinc-500 mt-4 text-sm">Esperando que el docente confirme al ganador...</p>' +
+                                    '<p id="ff-time-display" class="text-2xl font-black text-primary mt-3 tabular-nums">' + (timeSec != null ? timeSec + ' s' : '—') + '</p>' +
+                                    '<p class="text-zinc-500 text-xs mt-1">Tu tiempo de respuesta</p>' +
+                                    '<p id="ff-winner-msg" class="' + (data.is_provisional_winner ? 'text-amber-400 font-bold mt-3 text-sm' : 'text-zinc-500 mt-4 text-sm') + '">' +
+                                    (data.is_provisional_winner
+                                        ? 'Eres el más rápido hasta ahora. El docente te confirmará para Silla Caliente.'
+                                        : 'Esperando que el docente confirme al ganador...') +
+                                    '</p>' +
                                     '<div id="ff-winner-link" class="hidden mt-6"></div>' +
                                     '</div>';
                             } else {
@@ -266,13 +272,23 @@ const submitError = Astro.url.searchParams.get('error');
                                         .then(function(status) {
                                             var msgEl = document.getElementById('ff-winner-msg');
                                             var linkEl = document.getElementById('ff-winner-link');
-                                            if (status && status.finished && msgEl && linkEl) {
+                                            var timeEl = document.getElementById('ff-time-display');
+                                            if (status && status.my_time_sec && timeEl && !timeEl.textContent.trim()) {
+                                                timeEl.textContent = status.my_time_sec + ' s';
+                                            }
+                                            if (status && !status.finished && status.is_provisional_winner && msgEl) {
+                                                msgEl.textContent = 'Eres el más rápido hasta ahora. El docente te confirmará para Silla Caliente.';
+                                                msgEl.className = 'text-amber-400 font-bold mt-4 text-sm';
+                                            }
+                                            if (status && status.finished && linkEl) {
                                                 if (status.isWinner) {
-                                                    msgEl.textContent = '¡Eres el ganador! Pasa a la Silla Caliente.';
-                                                    msgEl.className = 'text-success font-bold mt-4 text-lg';
+                                                    if (msgEl) {
+                                                        msgEl.textContent = '¡Eres el ganador! Pasa a la Silla Caliente.';
+                                                        msgEl.className = 'text-success font-bold mt-4 text-lg';
+                                                    }
                                                     linkEl.innerHTML = '<a href="/play/silla-caliente" class="btn btn-warning btn-lg font-black text-zinc-900">Entrar a Silla Caliente</a>';
                                                     linkEl.classList.remove('hidden');
-                                                } else {
+                                                } else if (msgEl) {
                                                     msgEl.textContent = 'Correcto, pero no fuiste el más rápido. El ganador pasará a Silla Caliente.';
                                                     msgEl.className = 'text-zinc-400 mt-4';
                                                     linkEl.innerHTML = '<p class="text-zinc-500 text-sm mt-2">Fin de tu participación.</p><a href="/play" class="btn btn-ghost mt-4">Volver al inicio</a>';

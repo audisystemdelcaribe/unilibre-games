@@ -193,7 +193,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     }
 
     if (!saved.alreadyAnswered) {
-        if (points > 0) {
+        if (points > 0 && !isJuegoFinal) {
             await supabaseAdmin.rpc("registrar_puntaje_ganado", {
                 p_session_id: sessionIdNum,
                 p_event_id: roundRes.data.event_id,

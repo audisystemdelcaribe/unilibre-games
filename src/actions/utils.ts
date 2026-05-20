@@ -47,6 +47,31 @@ export function isPreseleccionOnly(role: string | undefined): boolean {
     return role === 'preseleccion';
 }
 
+/** Roles que pueden crear y editar preguntas en el banco. */
+export function canManageQuestions(role: string | undefined): boolean {
+    return role === "admin" || role === "docente";
+}
+
+/**
+ * GUARDÍAN: Banco de preguntas (admin y docente).
+ */
+export async function ensureQuestionManager(context: any) {
+    const user = await context.locals.getUser();
+    if (!user) throw new Error("Debes iniciar sesión");
+
+    const { data: profile } = await context.locals.supabase
+        .from("players")
+        .select("role")
+        .eq("auth_user_id", user.id)
+        .single();
+
+    if (!canManageQuestions(profile?.role)) {
+        throw new Error("Acceso denegado: Solo docentes y administradores pueden gestionar preguntas");
+    }
+
+    return user;
+}
+
 /**
  * GUARDÍAN 3: Solo admin y docente (NO preseleccion). Para Mente más Rápida, Clásico, etc.
  */

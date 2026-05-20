@@ -16,8 +16,10 @@ const { data: profile } = await Astro.locals.supabase.from('players').select('ro
 if (profile?.role !== 'admin' && profile?.role !== 'docente') return Astro.redirect("/dashboard");
 
 const removeResult = Astro.getActionResult(actions.removeFinalist);
-if (removeResult?.data?.redirectTo) {
-    return Astro.redirect(removeResult.data.redirectTo);
+const replaceResult = Astro.getActionResult(actions.replaceFinalist);
+const actionRedirect = removeResult?.data?.redirectTo || replaceResult?.data?.redirectTo;
+if (actionRedirect) {
+    return Astro.redirect(actionRedirect);
 }
 
 // Filtros desde URL
@@ -53,6 +55,23 @@ const { data: programs } = await Astro.locals.supabase
 
 let finalistsByProgram: { programId: number; programName: string; finalists: FinalistRow[] }[] = [];
 let hasProgramMismatches = false;
+
+type EventParticipant = {
+    player_id: number;
+    name: string;
+    score: number;
+    final_rank: number | null;
+    is_finalist: boolean;
+    classroom_group_id: string;
+    total_time_ms: number | null;
+};
+
+/** Clave: event_id + salón (preselección específica con su PIN). */
+function preseleccionSessionKey(eventId: number, classroomGroupId: string) {
+    return `${eventId}::${classroomGroupId}`;
+}
+
+const participantsBySession = new Map<string, EventParticipant[]>();
 
 if (seasonId) {
     const { data: seasonEvents } = await supabaseAdmin
@@ -150,20 +169,56 @@ if (seasonId) {
                 finalists: data.list.sort((a, b) => b.score - a.score),
             }))
             .sort((a, b) => a.programName.localeCompare(b.programName));
+
+        const { data: allParticipants } = await supabaseAdmin
+            .from('event_players')
+            .select(
+                'event_id, player_id, classroom_group_id, score, is_finalist, final_rank, total_time_ms, players(name)'
+            )
+            .in('event_id', eventIds);
+
+        const bySessionPlayer = new Map<string, Map<number, EventParticipant>>();
+        for (const ep of allParticipants || []) {
+            const key = preseleccionSessionKey(ep.event_id as number, ep.classroom_group_id ?? '');
+            if (!bySessionPlayer.has(key)) bySessionPlayer.set(key, new Map());
+            const bucket = bySessionPlayer.get(key)!;
+            if (bucket.has(ep.player_id)) continue;
+            const pl = ep.players as { name?: string } | null;
+            bucket.set(ep.player_id, {
+                player_id: ep.player_id,
+                name: pl?.name ?? 'Desconocido',
+                score: ep.score ?? 0,
+                final_rank: ep.final_rank ?? null,
+                is_finalist: !!ep.is_finalist,
+                classroom_group_id: ep.classroom_group_id ?? '',
+                total_time_ms: ep.total_time_ms ?? null,
+            });
+        }
+        for (const [key, bucket] of bySessionPlayer) {
+            participantsBySession.set(
+                key,
+                [...bucket.values()].sort((a, b) => {
+                    if (b.score !== a.score) return b.score - a.score;
+                    return (a.total_time_ms ?? 0) - (b.total_time_ms ?? 0);
+                })
+            );
+        }
     }
 }
 
-const actionResult = removeResult;
+const participantsBySessionJson = Object.fromEntries([...participantsBySession.entries()]);
+
+const actionResult = removeResult || replaceResult;
 ---
 
 <DashboardLayout title="Finalistas por Programa" actionResult={actionResult}>
-    <div class="mb-8" replace_all
-false
+    <div class="mb-8">
         <h1 class="text-4xl font-black italic tracking-tighter text-slate-900 uppercase">
             Finalistas <span class="text-red-600">por Programa</span>
         </h1>
         <p class="text-slate-500 font-medium mt-1">
             Ganadores de Preselección por temporada. El listado agrupa por el programa del evento, no solo por el perfil del estudiante.
+            Si el ganador no puede asistir, usa <strong>Cambiar ganador</strong> para elegir a otro participante de la misma preselección (mismo evento y salón).
         </p>
     </div>
 
@@ -247,7 +302,7 @@ false
                                     <th class="font-black text-[10px] uppercase text-slate-500">Correo</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Puntaje</th>
                                     <th class="font-black text-[10px] uppercase text-slate-500">Evento</th>
-                                    <th class="font-black text-[10px] uppercase text-slate-500 w-24"></th>
+                                    <th class="font-black text-[10px] uppercase text-slate-500 min-w-[220px]"></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -272,27 +327,41 @@ false
                                         <td class="font-bold text-slate-700">{f.score?.toLocaleString('es-CO') ?? '—'}</td>
                                         <td class="text-sm text-slate-600">{f.eventName}</td>
                                         <td>
-                                            <form
-                                                method="POST"
-                                                action={actions.removeFinalist}
-                                                class="inline"
-                                                onsubmit="return confirm('¿Quitar a este estudiante como finalista? Ya no podrá entrar a Mente más Rápida con este criterio.');"
-                                            >
-                                                <input type="hidden" name="event_id" value={f.event_id} />
-                                                <input type="hidden" name="player_id" value={f.player_id} />
-                                                {f.classroom_group_id && (
-                                                    <input type="hidden" name="classroom_group_id" value={f.classroom_group_id} />
-                                                )}
-                                                {seasonId && <input type="hidden" name="season_id" value={seasonId} />}
-                                                {programId && <input type="hidden" name="program_id" value={programId} />}
-                                                <FormButton
-                                                    type="submit"
-                                                    class="btn btn-ghost btn-xs text-red-600 hover:bg-red-50 border border-red-200"
+                                            <div class="flex flex-col gap-2 min-w-[140px]">
+                                                <button
+                                                    type="button"
+                                                    class="btn btn-xs btn-primary text-white replace-finalist-open"
+                                                    data-event-id={f.event_id}
+                                                    data-outgoing-id={f.player_id}
+                                                    data-outgoing-name={f.name}
+                                                    data-event-name={f.eventName}
+                                                    data-classroom-group={f.classroom_group_id}
                                                 >
-                                                    <Icon name="lucide:trash-2" class="w-3.5 h-3.5" />
-                                                    Eliminar
-                                                </FormButton>
-                                            </form>
+                                                    <Icon name="lucide:user-round-check" class="w-3.5 h-3.5" />
+                                                    Cambiar ganador
+                                                </button>
+                                                <form
+                                                    method="POST"
+                                                    action={actions.removeFinalist}
+                                                    class="inline"
+                                                    onsubmit="return confirm('¿Quitar a este estudiante como finalista? Ya no podrá entrar a Mente más Rápida con este criterio.');"
+                                                >
+                                                    <input type="hidden" name="event_id" value={f.event_id} />
+                                                    <input type="hidden" name="player_id" value={f.player_id} />
+                                                    {f.classroom_group_id && (
+                                                        <input type="hidden" name="classroom_group_id" value={f.classroom_group_id} />
+                                                    )}
+                                                    {seasonId && <input type="hidden" name="season_id" value={seasonId} />}
+                                                    {programId && <input type="hidden" name="program_id" value={programId} />}
+                                                    <FormButton
+                                                        type="submit"
+                                                        class="btn btn-ghost btn-xs text-red-600 hover:bg-red-50 border border-red-200 w-full"
+                                                    >
+                                                        <Icon name="lucide:trash-2" class="w-3.5 h-3.5" />
+                                                        Quitar
+                                                    </FormButton>
+                                                </form>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -303,4 +372,151 @@ false
             ))}
         </div>
     )}
+
+    <dialog id="replace-finalist-modal" class="modal">
+        <div class="modal-box max-w-2xl w-[calc(100%-2rem)] bg-white text-slate-900">
+            <h3 class="font-black text-lg uppercase tracking-tight text-slate-900" id="replace-modal-title">
+                Cambiar ganador
+            </h3>
+            <p class="text-sm text-slate-500 mt-1" id="replace-modal-subtitle"></p>
+            <p class="text-xs text-slate-400 mt-2" id="replace-modal-count"></p>
+
+            <form method="POST" action={actions.replaceFinalist} id="replace-finalist-form" class="mt-4">
+                <input type="hidden" name="event_id" id="replace-form-event-id" value="" />
+                <input type="hidden" name="outgoing_player_id" id="replace-form-outgoing-id" value="" />
+                <input type="hidden" name="incoming_player_id" id="replace-form-incoming-id" value="" />
+                <input type="hidden" name="classroom_group_id" id="replace-form-classroom-group" value="" />
+                {seasonId && <input type="hidden" name="season_id" value={seasonId} />}
+                {programId && <input type="hidden" name="program_id" value={programId} />}
+
+                <div class="max-h-[min(60vh,420px)] overflow-y-auto border border-slate-200 rounded-xl mt-3">
+                    <table class="table table-sm table-zebra">
+                        <thead class="sticky top-0 bg-slate-100 z-10">
+                            <tr>
+                                <th class="text-[10px] uppercase">#</th>
+                                <th class="text-[10px] uppercase">Estudiante</th>
+                                <th class="text-[10px] uppercase">Salón</th>
+                                <th class="text-[10px] uppercase">Puntaje</th>
+                                <th class="text-[10px] uppercase">Tiempo</th>
+                                <th class="text-[10px] uppercase w-28"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="replace-modal-tbody"></tbody>
+                    </table>
+                </div>
+                <p id="replace-modal-empty" class="hidden text-sm text-slate-500 py-8 text-center">
+                    No hay participantes registrados en esta preselección.
+                </p>
+
+                <div class="modal-action mt-4">
+                    <button type="button" class="btn btn-ghost" id="replace-modal-cancel">Cancelar</button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button type="submit" id="replace-modal-backdrop-close">cerrar</button>
+        </form>
+    </dialog>
+
+    <script is:inline define:vars={{ participantsBySessionJson, seasonId, programId }}>
+        (function() {
+            var modal = document.getElementById('replace-finalist-modal');
+            var tbody = document.getElementById('replace-modal-tbody');
+            var emptyMsg = document.getElementById('replace-modal-empty');
+            var titleEl = document.getElementById('replace-modal-title');
+            var subtitleEl = document.getElementById('replace-modal-subtitle');
+            var countEl = document.getElementById('replace-modal-count');
+            var formEventId = document.getElementById('replace-form-event-id');
+            var formOutgoingId = document.getElementById('replace-form-outgoing-id');
+            var formIncomingId = document.getElementById('replace-form-incoming-id');
+            var formGroup = document.getElementById('replace-form-classroom-group');
+            var cancelBtn = document.getElementById('replace-modal-cancel');
+
+            function formatTime(ms) {
+                if (ms == null || !Number.isFinite(ms)) return '—';
+                return (ms / 1000).toFixed(1) + ' s';
+            }
+
+            function openModal(btn) {
+                var eventId = String(btn.getAttribute('data-event-id') || '');
+                var outgoingId = parseInt(btn.getAttribute('data-outgoing-id') || '0', 10);
+                var outgoingName = btn.getAttribute('data-outgoing-name') || '';
+                var eventName = btn.getAttribute('data-event-name') || '';
+                var classroomGroup = btn.getAttribute('data-classroom-group') || '';
+
+                var sessionKey = eventId + '::' + (classroomGroup || '');
+                var list = participantsBySessionJson[sessionKey] || [];
+                if (titleEl) titleEl.textContent = 'Cambiar ganador';
+                if (subtitleEl) {
+                    subtitleEl.textContent = 'Preselección: ' + eventName + ' · Salón: ' + (classroomGroup || '—') + ' · Actual: ' + outgoingName;
+                }
+                if (formEventId) formEventId.value = eventId;
+                if (formOutgoingId) formOutgoingId.value = String(outgoingId);
+                if (formGroup) formGroup.value = classroomGroup;
+                if (formIncomingId) formIncomingId.value = '';
+
+                if (!tbody) return;
+                tbody.innerHTML = '';
+
+                var replaceable = list.filter(function(p) { return p.player_id !== outgoingId; });
+                if (countEl) {
+                    countEl.textContent = list.length + ' participante' + (list.length !== 1 ? 's' : '') + ' en esta preselección · ' +
+                        replaceable.length + ' disponible' + (replaceable.length !== 1 ? 's' : '') + ' para reemplazo';
+                }
+
+                if (list.length === 0) {
+                    if (emptyMsg) emptyMsg.classList.remove('hidden');
+                    tbody.parentElement && tbody.parentElement.classList.add('hidden');
+                } else {
+                    if (emptyMsg) emptyMsg.classList.add('hidden');
+                    tbody.parentElement && tbody.parentElement.classList.remove('hidden');
+                    list.forEach(function(p, idx) {
+                        var isCurrent = p.player_id === outgoingId;
+                        var tr = document.createElement('tr');
+                        if (isCurrent) tr.className = 'bg-amber-100/80';
+                        else if (p.is_finalist) tr.className = 'bg-amber-50';
+                        var salon = p.classroom_group_id || '—';
+                        var badges = isCurrent
+                            ? ' <span class="badge badge-warning badge-xs">Ganador actual</span>'
+                            : (p.is_finalist ? ' <span class="badge badge-ghost badge-xs">Finalista</span>' : '');
+                        tr.innerHTML =
+                            '<td class="font-bold text-slate-500">' + (idx + 1) + '</td>' +
+                            '<td class="font-bold">' + (p.name || 'Estudiante') + badges + '</td>' +
+                            '<td class="text-xs">' + salon + '</td>' +
+                            '<td class="tabular-nums font-bold">' + (p.score || 0).toLocaleString('es-CO') + '</td>' +
+                            '<td class="text-xs tabular-nums">' + formatTime(p.total_time_ms) + '</td>' +
+                            '<td></td>';
+                        var tdBtn = tr.lastElementChild;
+                        if (!isCurrent) {
+                            var pick = document.createElement('button');
+                            pick.type = 'button';
+                            pick.className = 'btn btn-xs btn-primary text-white';
+                            pick.textContent = 'Elegir';
+                            pick.addEventListener('click', function() {
+                                if (!confirm('¿Asignar a ' + (p.name || 'este estudiante') + ' como ganador? ' + outgoingName + ' dejará de ser finalista.')) return;
+                                if (formIncomingId) formIncomingId.value = String(p.player_id);
+                                var form = document.getElementById('replace-finalist-form');
+                                if (form) form.submit();
+                            });
+                            if (tdBtn) tdBtn.appendChild(pick);
+                        } else if (tdBtn) {
+                            tdBtn.innerHTML = '<span class="text-[10px] text-amber-700 font-bold">Actual</span>';
+                        }
+                        tbody.appendChild(tr);
+                    });
+                }
+
+                if (modal && typeof modal.showModal === 'function') modal.showModal();
+            }
+
+            function closeModal() {
+                if (modal && typeof modal.close === 'function') modal.close();
+            }
+
+            document.querySelectorAll('.replace-finalist-open').forEach(function(btn) {
+                btn.addEventListener('click', function() { openModal(btn); });
+            });
+            if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+        })();
+    </script>
 </DashboardLayout>

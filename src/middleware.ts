@@ -53,5 +53,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
         return context.redirect("/dashboard");
     }
 
+    if (url.pathname === "/recuperar-clave" && user) {
+        return context.redirect("/dashboard");
+    }
+
     return next();
 });

@@ -152,4 +152,86 @@ export const usersActions = {
         }
     }),
 
+    createUser: defineAction({
+        accept: 'form',
+        input: z.object({
+            email: z.string().email("Correo inválido").refine((e) => e.endsWith("@unilibre.edu.co"), {
+                message: "Debe ser un correo institucional (@unilibre.edu.co)",
+            }),
+            password: z.string().min(6, "La contraseña debe tener al menos 6 caracteres"),
+            name: z.string().min(3, "Nombre debe tener al menos 3 caracteres"),
+            program_id: z.string(),
+            semester: z.string().refine(
+                (v) => !isNaN(parseInt(v)) && parseInt(v) >= 1 && parseInt(v) <= 12,
+                "Semestre entre 1 y 12"
+            ),
+            role: z.enum(['admin', 'docente', 'player', 'preseleccion']),
+        }),
+        handler: async (input, context) => {
+            await ensureAdmin(context);
+
+            const email = input.email.trim().toLowerCase();
+            const programId = parseInt(input.program_id);
+            const semester = parseInt(input.semester);
+
+            const { data: programExists } = await supabaseAdmin
+                .from("programs")
+                .select("id")
+                .eq("id", programId)
+                .single();
+            if (!programExists) {
+                throw new Error("El programa seleccionado no existe");
+            }
+
+            const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+                email,
+                password: input.password,
+                email_confirm: true,
+                user_metadata: {
+                    full_name: input.name,
+                    program_id: programId,
+                    semester,
+                    role: input.role,
+                },
+            });
+
+            if (authError) {
+                if (/already|registered|exists|duplicate/i.test(authError.message)) {
+                    throw new Error("Ya existe un usuario con ese correo");
+                }
+                throw new Error(authError.message);
+            }
+
+            const authUserId = authData.user?.id;
+            if (!authUserId) throw new Error("No se pudo crear la cuenta de acceso");
+
+            const playerPayload = {
+                auth_user_id: authUserId,
+                name: input.name,
+                program_id: programId,
+                semester,
+                role: input.role,
+            };
+
+            const { data: existing } = await supabaseAdmin
+                .from("players")
+                .select("id")
+                .eq("auth_user_id", authUserId)
+                .maybeSingle();
+
+            if (existing?.id) {
+                const { error: updateErr } = await supabaseAdmin
+                    .from("players")
+                    .update(playerPayload)
+                    .eq("id", existing.id);
+                if (updateErr) throw new Error(updateErr.message);
+            } else {
+                const { error: insertErr } = await supabaseAdmin.from("players").insert(playerPayload);
+                if (insertErr) throw new Error(insertErr.message);
+            }
+
+            return { success: true, message: `Usuario ${input.name} creado correctamente` };
+        },
+    }),
+
 };

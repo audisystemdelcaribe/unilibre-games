@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { formatFastestTimeMs, getProvisionalWinner, loadFastestFingerAttempts } from "@/lib/fastestFingerResults";
 
 export const POST: APIRoute = async ({ request, locals }) => {
     const user = await locals.getUser();
@@ -23,11 +24,18 @@ export const POST: APIRoute = async ({ request, locals }) => {
         });
     }
 
-    const eventRoundId = event_round_id ? parseInt(event_round_id) : NaN;
-    const responseTimeMs = parseInt(response_time_ms);
+    const eventRoundId = event_round_id ? parseInt(event_round_id, 10) : NaN;
+    const responseTimeMs = parseInt(response_time_ms, 10);
+    if (!Number.isFinite(responseTimeMs) || responseTimeMs < 0) {
+        return new Response(JSON.stringify({ error: "Tiempo de respuesta inválido" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+        });
+    }
     let selectedOrder: number[];
     try {
-        selectedOrder = JSON.parse(selected_order) as number[];
+        const parsed = JSON.parse(selected_order) as unknown[];
+        selectedOrder = parsed.map((id) => Number(id)).filter((id) => Number.isFinite(id));
     } catch {
         return new Response(JSON.stringify({ error: "Orden inválido" }), {
             status: 400,
@@ -148,11 +156,18 @@ export const POST: APIRoute = async ({ request, locals }) => {
         }
     }
 
+    const { attempts } = await loadFastestFingerAttempts(supabaseAdmin, ffRound.event_round_id);
+    const provisional = getProvisionalWinner(attempts);
+    const isProvisionalWinner = !!provisional && provisional.player_id === player.id;
+
     return new Response(
         JSON.stringify({
             success: true,
             correct: isCorrect,
-            time: (responseTimeMs / 1000).toFixed(2),
+            time: formatFastestTimeMs(responseTimeMs),
+            response_time_ms: responseTimeMs,
+            is_provisional_winner: isCorrect && isProvisionalWinner,
+            provisional_winner_name: provisional?.name ?? null,
         }),
         {
             status: 200,

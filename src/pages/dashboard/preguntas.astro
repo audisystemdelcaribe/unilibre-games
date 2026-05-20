@@ -10,6 +10,8 @@ if (!user) return Astro.redirect("/");
 const { data: profile } = await Astro.locals.supabase.from('players').select('role').eq('auth_user_id', user.id).single();
 if (profile?.role !== 'admin' && profile?.role !== 'docente') return Astro.redirect("/dashboard");
 
+const isAdmin = profile?.role === 'admin';
+
 const result = Astro.getActionResult(actions.saveQuestion) || Astro.getActionResult(actions.deleteQuestion);
 
 // --- LÓGICA DE FILTROS, BÚSQUEDA Y PAGINACIÓN ---
@@ -27,10 +29,16 @@ const to = from + pageSize - 1;
 const { data: faculties } = await Astro.locals.supabase.from('faculties').select('id, name').order('name');
 const { data: allPrograms } = await Astro.locals.supabase.from('programs').select('id, name, faculty_id').order('name');
 const { data: levels } = await Astro.locals.supabase.from('game_levels').select('id, name, money_value').order('difficulty_order');
-const { data: subjectMappings } = await Astro.locals.supabase.from('program_subjects').select('program_id, subject_id, subjects(name)');
+const { data: subjectMappingsRaw } = await Astro.locals.supabase
+    .from('program_subjects')
+    .select('program_id, subject_id, subjects(name)');
+const subjectMappings = [...(subjectMappingsRaw || [])].sort((a, b) =>
+    (a.subjects?.name || '').localeCompare(b.subjects?.name || '', 'es', { sensitivity: 'base' })
+);
 const { data: allSubjects } = await Astro.locals.supabase.from('subjects').select('id, name').order('name');
 
 const programNameById = new Map((allPrograms || []).map((p) => [p.id, p.name]));
+const programFacultyById = new Map((allPrograms || []).map((p) => [p.id, p.faculty_id]));
 const facultyNameById = new Map((faculties || []).map((f) => [f.id, f.name]));
 const subjectNameById = new Map((allSubjects || []).map((s) => [s.id, s.name]));
 
@@ -373,9 +381,11 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                                     >
                                         <Icon name="lucide:pencil" class="w-4 h-4" />
                                     </button>
-                                    <button class="btn btn-ghost btn-sm btn-square text-error btn-delete" data-id={q.id} data-text={q.question_text}>
-                                        <Icon name="lucide:trash-2" class="w-4 h-4" />
-                                    </button>
+                                    {isAdmin && (
+                                        <button class="btn btn-ghost btn-sm btn-square text-error btn-delete" data-id={q.id} data-text={q.question_text}>
+                                            <Icon name="lucide:trash-2" class="w-4 h-4" />
+                                        </button>
+                                    )}
                                 </div>
                             </td>
                         </tr>
@@ -452,11 +462,19 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                         <label class="label"><span class="label-text font-black text-[10px] uppercase text-primary">4. Asignatura</span></label>
                         <select name="subject_id" id="f_sub" required class="select select-bordered bg-white">
                             <option value="">Elegir Materia...</option>
-                            {subjectMappings?.map(m => (
-                                    <option value={m.subject_id} data-program-id={m.program_id} class="hidden">
+                            {subjectMappings?.map(m => {
+                                const facultyId = programFacultyById.get(m.program_id);
+                                return (
+                                    <option
+                                        value={m.subject_id}
+                                        data-program-id={m.program_id}
+                                        data-faculty-id={facultyId ?? ''}
+                                        class="hidden"
+                                    >
                                         {m.subjects?.name}
                                     </option>
-                            ))}
+                                );
+                            })}
                         </select>
                     </div>
                 </div>
@@ -514,6 +532,20 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
     const subSelect = document.getElementById('f_sub') as HTMLSelectElement;
 
     // --- REUTILIZABLE: FILTRAR VISTA ---
+    function sortSubjectOptionsVisible(select: HTMLSelectElement) {
+        const placeholder = select.querySelector('option[value=""]');
+        const visible: HTMLOptionElement[] = [];
+        select.querySelectorAll('option').forEach((opt) => {
+            if (opt.value === '' || opt.classList.contains('hidden')) return;
+            visible.push(opt as HTMLOptionElement);
+        });
+        visible.sort((a, b) =>
+            (a.textContent || '').localeCompare(b.textContent || '', 'es', { sensitivity: 'base' })
+        );
+        visible.forEach((opt) => select.appendChild(opt));
+        if (placeholder) select.insertBefore(placeholder, select.firstChild);
+    }
+
     function filterCascade(parentId: string, childSelect: HTMLSelectElement, dataAttr: string) {
         let count = 0;
         childSelect.querySelectorAll('option').forEach(opt => {
@@ -523,6 +555,46 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
             if (match) count++;
         });
         if (count > 0) childSelect.value = "";
+        sortSubjectOptionsVisible(childSelect);
+    }
+
+    /** Asignaturas de todos los programas de la facultad (sin duplicar materia). */
+    function filterSubjectsByFaculty(facultyId: string) {
+        const seenSubjectIds = new Set<string>();
+        let count = 0;
+        subSelect.querySelectorAll('option').forEach(opt => {
+            if (opt.value === "") return;
+            const match =
+                facultyId !== "" &&
+                opt.getAttribute('data-faculty-id') === facultyId &&
+                !seenSubjectIds.has(opt.value);
+            opt.classList.toggle('hidden', !match);
+            if (match) {
+                seenSubjectIds.add(opt.value);
+                count++;
+            }
+        });
+        if (count > 0) subSelect.value = "";
+        sortSubjectOptionsVisible(subSelect);
+    }
+
+    function refreshSubjectsForScope() {
+        const scope = scopeSelect.value;
+        if (scope === 'global') {
+            subSelect.querySelectorAll('option').forEach((opt) => {
+                if (opt.value !== '') opt.classList.remove('hidden');
+            });
+            sortSubjectOptionsVisible(subSelect);
+            return;
+        }
+        subSelect.querySelectorAll('option').forEach((opt) => {
+            if (opt.value !== '') opt.classList.add('hidden');
+        });
+        if (scope === 'faculty' && facSelect.value) {
+            filterSubjectsByFaculty(facSelect.value);
+        } else if (scope === 'program' && progSelect.value) {
+            filterCascade(progSelect.value, subSelect, 'data-program-id');
+        }
     }
 
     // --- LOGICA DE VISIBILIDAD DE FILTROS ---
@@ -533,11 +605,23 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
 
         facSelect.required = (val !== 'global');
         progSelect.required = (val === 'program');
+
+        if (val !== 'global') subSelect.value = '';
+        refreshSubjectsForScope();
     });
 
     // --- DISPARADORES DE CASCADA ---
-    facSelect.addEventListener('change', () => filterCascade(facSelect.value, progSelect, 'data-faculty-id'));
-    progSelect.addEventListener('change', () => filterCascade(progSelect.value, subSelect, 'data-program-id'));
+    facSelect.addEventListener('change', () => {
+        filterCascade(facSelect.value, progSelect, 'data-faculty-id');
+        if (scopeSelect.value === 'faculty') {
+            filterSubjectsByFaculty(facSelect.value);
+        }
+    });
+    progSelect.addEventListener('change', () => {
+        if (scopeSelect.value === 'program') {
+            filterCascade(progSelect.value, subSelect, 'data-program-id');
+        }
+    });
 
     // --- NUEVA PREGUNTA ---
     document.getElementById('btn-nueva')?.addEventListener('click', () => {
@@ -586,8 +670,8 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                 }
                 if (progId) {
                     progSelect.value = progId;
-                    filterCascade(progId, subSelect, 'data-program-id');
                 }
+                refreshSubjectsForScope();
                 subSelect.value = subId || '';
 
                 // Llenar las 4 respuestas

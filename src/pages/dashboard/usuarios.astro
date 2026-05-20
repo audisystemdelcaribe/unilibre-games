@@ -13,18 +13,38 @@ const { data: myProfile } = await Astro.locals.supabase
     .single();
 if (myProfile?.role !== 'admin') return Astro.redirect("/dashboard");
 
-// 1. Obtener lista de usuarios con su programa y programas para editar
-const { data: players, error } = await Astro.locals.supabase
+const url = new URL(Astro.request.url);
+const search = (url.searchParams.get('search') || '').trim();
+const roleFilter = url.searchParams.get('role') || '';
+const programFilter = url.searchParams.get('program_id') || '';
+
+let playersQuery = Astro.locals.supabase
     .from('players')
-    .select('*, programs(name)')
+    .select('*, programs(name)', { count: 'exact' })
     .order('name', { ascending: true });
+
+if (search) playersQuery = playersQuery.ilike('name', `%${search}%`);
+if (roleFilter) playersQuery = playersQuery.eq('role', roleFilter);
+if (programFilter) {
+    const pid = parseInt(programFilter);
+    if (!Number.isNaN(pid)) playersQuery = playersQuery.eq('program_id', pid);
+}
+
+const { data: players, count: filteredCount } = await playersQuery;
+
+const { count: totalCount } = await Astro.locals.supabase
+    .from('players')
+    .select('*', { count: 'exact', head: true });
 
 const { data: programs } = await Astro.locals.supabase
     .from('programs')
     .select('id, name')
     .order('name', { ascending: true });
 
-const result = Astro.getActionResult(actions.updateUserRole)
+const hasFilters = !!(search || roleFilter || programFilter);
+
+const result = Astro.getActionResult(actions.createUser)
+    || Astro.getActionResult(actions.updateUserRole)
     || Astro.getActionResult(actions.updatePlayer)
     || Astro.getActionResult(actions.changePassword)
     || Astro.getActionResult(actions.deleteUser);
@@ -38,10 +58,63 @@ const result = Astro.getActionResult(actions.updateUserRole)
             </h1>
             <p class="text-slate-500 font-medium mt-1">Administra los accesos y privilegios del sistema.</p>
         </div>
+        <button type="button" id="btn-create-user" class="btn btn-primary text-white font-bold px-6 shadow-lg shadow-red-200 shrink-0">
+            <Icon name="lucide:user-plus" class="w-5 h-5" />
+            Crear usuario
+        </button>
     </div>
+
+    <form method="get" class="grid grid-cols-1 md:grid-cols-12 gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+        <div class="md:col-span-4 relative">
+            <Icon name="lucide:search" class="absolute left-3 top-3 text-slate-400 w-4 h-4" />
+            <input
+                name="search"
+                value={search}
+                type="text"
+                placeholder="Buscar por nombre..."
+                class="input input-bordered w-full pl-10 bg-slate-50"
+            />
+        </div>
+        <div class="md:col-span-3">
+            <select name="role" class="select select-bordered w-full font-bold text-xs uppercase bg-slate-50">
+                <option value="">Todos los roles</option>
+                <option value="player" selected={roleFilter === 'player'}>Estudiante</option>
+                <option value="docente" selected={roleFilter === 'docente'}>Docente</option>
+                <option value="preseleccion" selected={roleFilter === 'preseleccion'}>Preselección</option>
+                <option value="admin" selected={roleFilter === 'admin'}>Administrador</option>
+            </select>
+        </div>
+        <div class="md:col-span-3">
+            <select name="program_id" class="select select-bordered w-full font-bold text-xs bg-slate-50">
+                <option value="">Todos los programas</option>
+                {programs?.map((prog) => (
+                    <option value={prog.id} selected={programFilter === String(prog.id)}>
+                        {prog.name}
+                    </option>
+                ))}
+            </select>
+        </div>
+        <div class="md:col-span-2 flex gap-2">
+            <button type="submit" class="btn btn-primary flex-1 text-white font-bold text-[10px] uppercase">
+                Filtrar
+            </button>
+            {hasFilters && (
+                <a href="/dashboard/usuarios" class="btn btn-ghost border border-slate-200" title="Limpiar filtros">
+                    <Icon name="lucide:rotate-ccw" class="w-4 h-4" />
+                </a>
+            )}
+        </div>
+    </form>
+
+    <p class="text-sm text-slate-500 font-medium mb-4">
+        {hasFilters
+            ? `Mostrando ${filteredCount ?? 0} de ${totalCount ?? 0} usuarios`
+            : `${totalCount ?? 0} usuarios en total`}
+    </p>
 
     <div class="bg-white rounded-[2.5rem] shadow-xl border border-slate-100 overflow-hidden">
         <div class="overflow-x-auto">
+            {players && players.length > 0 ? (
             <table class="table table-zebra w-full">
                 <thead>
                     <tr class="bg-slate-50 border-b border-slate-100">
@@ -127,8 +200,75 @@ const result = Astro.getActionResult(actions.updateUserRole)
                     ))}
                 </tbody>
             </table>
+            ) : (
+                <div class="py-16 text-center">
+                    <p class="text-slate-400 italic">
+                        {hasFilters ? 'No hay usuarios con esos filtros.' : 'No hay usuarios registrados.'}
+                    </p>
+                    {hasFilters && (
+                        <a href="/dashboard/usuarios" class="btn btn-ghost btn-sm mt-4">Ver todos</a>
+                    )}
+                </div>
+            )}
         </div>
     </div>
+
+    <!-- MODAL CREAR USUARIO -->
+    <dialog id="create_modal" class="modal modal-bottom sm:modal-middle">
+        <div class="modal-box bg-white rounded-[2.5rem] p-10 border-none shadow-2xl max-w-lg">
+            <div class="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mb-6">
+                <Icon name="lucide:user-plus" class="w-8 h-8" />
+            </div>
+            <h3 class="text-3xl font-black italic uppercase tracking-tighter text-slate-900 mb-2">
+                Nuevo <span class="text-emerald-600">Usuario</span>
+            </h3>
+            <p class="text-slate-500 text-sm font-medium mb-8">
+                Crea una cuenta con correo institucional. El usuario podrá iniciar sesión de inmediato.
+            </p>
+
+            <form method="POST" action={actions.createUser} class="space-y-5" id="form-create-user">
+                <div class="form-control">
+                    <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Nombre completo</span></label>
+                    <input name="name" type="text" required minlength="3" class="input input-bordered w-full rounded-2xl font-bold" placeholder="Ej: María García" />
+                </div>
+                <div class="form-control">
+                    <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Correo @unilibre.edu.co</span></label>
+                    <input name="email" type="email" required class="input input-bordered w-full rounded-2xl font-bold" placeholder="usuario@unilibre.edu.co" />
+                </div>
+                <div class="form-control">
+                    <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Contraseña inicial (mín. 6)</span></label>
+                    <input name="password" type="password" required minlength="6" class="input input-bordered w-full rounded-2xl font-bold" placeholder="••••••••" autocomplete="new-password" />
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="form-control">
+                        <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Programa</span></label>
+                        <select name="program_id" required class="select select-bordered w-full rounded-2xl font-bold">
+                            <option value="">Selecciona...</option>
+                            {programs?.map(p => <option value={p.id}>{p.name}</option>)}
+                        </select>
+                    </div>
+                    <div class="form-control">
+                        <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Semestre</span></label>
+                        <input name="semester" type="number" min="1" max="12" required class="input input-bordered w-full rounded-2xl font-bold" placeholder="1" value="1" />
+                    </div>
+                </div>
+                <div class="form-control">
+                    <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Rol</span></label>
+                    <select name="role" required class="select select-bordered w-full rounded-2xl font-bold">
+                        <option value="player">Estudiante (player)</option>
+                        <option value="preseleccion">Preselección</option>
+                        <option value="docente">Docente</option>
+                        <option value="admin">Administrador</option>
+                    </select>
+                </div>
+
+                <div class="modal-action flex gap-3 mt-8">
+                    <button type="button" class="btn btn-ghost flex-1 rounded-2xl font-black uppercase italic text-xs tracking-widest" onclick="create_modal.close()">Cancelar</button>
+                    <button type="submit" class="btn bg-emerald-600 hover:bg-emerald-700 text-white flex-1 rounded-2xl font-black uppercase italic text-xs tracking-widest border-none">Crear usuario</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
 
     <!-- MODAL CAMBIAR ROL -->
     <dialog id="role_modal" class="modal modal-bottom sm:modal-middle">
@@ -163,8 +303,8 @@ const result = Astro.getActionResult(actions.updateUserRole)
                     <label class="flex items-center gap-4 p-5 rounded-3xl border-2 border-slate-100 hover:border-blue-100 cursor-pointer transition-all has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50/30 group">
                         <input type="radio" name="role" value="docente" class="radio radio-primary" />
                         <div>
-                            <p class="font-black uppercase text-xs text-slate-900">Docente / Staff</p>
-                            <p class="text-[10px] text-slate-500 font-medium italic">Gestión de bancos de preguntas y eventos.</p>
+                            <p class="font-black uppercase text-xs text-slate-900">Docente</p>
+                            <p class="text-[10px] text-slate-500 font-medium italic">Ver y crear preguntas en el banco; gestionar eventos y salones en vivo.</p>
                         </div>
                     </label>
 
@@ -277,6 +417,14 @@ const result = Astro.getActionResult(actions.updateUserRole)
 </DashboardLayout>
 
 <script is:inline>
+    document.getElementById('btn-create-user')?.addEventListener('click', () => {
+        const form = document.getElementById('form-create-user');
+        if (form instanceof HTMLFormElement) form.reset();
+        const sem = form?.querySelector('input[name="semester"]');
+        if (sem instanceof HTMLInputElement) sem.value = '1';
+        create_modal.showModal();
+    });
+
     document.querySelectorAll('[data-action]').forEach(btn => {
         btn.addEventListener('click', () => {
             const id = btn.dataset.id;

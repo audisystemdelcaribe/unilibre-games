@@ -1,5 +1,7 @@
 import type { APIRoute } from "astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { loadClasicoCurrentQuestion } from "@/lib/clasicoQuestionView";
+import { loadFastestFingerAttempts } from "@/lib/fastestFingerResults";
 import { seededShuffle } from "@/lib/utils";
 
 /**
@@ -71,6 +73,13 @@ export const GET: APIRoute = async ({ locals, url }) => {
         fastest_finger_attempts?: { player_id: number; name: string; response_time_ms: number; is_correct: boolean }[];
         student_selection?: { player_id: number; name: string; answer_id: number; answer_text: string; letter: string } | null;
         last_word_used?: boolean;
+        current_question?: {
+            id: number;
+            question_text: string;
+            level_id: number | null;
+            level_name: string | null;
+            answers: { id: number; answer_text: string; letter: string; is_correct: boolean }[];
+        } | null;
     } = {
         connected: [],
         responders: [],
@@ -78,25 +87,10 @@ export const GET: APIRoute = async ({ locals, url }) => {
         status: round.status || "waiting",
     };
 
-    // Si es Mente más Rápida, traer intentos (supabaseAdmin evita RLS)
+    // Si es Mente más Rápida, traer intentos (sin embed; nombres en consulta aparte)
     if (round.status === "fastest_finger") {
-        const { data: ffRound } = await supabaseAdmin
-            .from("fastest_finger_rounds")
-            .select("id")
-            .eq("event_round_id", parseInt(roundId, 10))
-            .maybeSingle();
-        if (ffRound) {
-            const { data: attempts } = await supabaseAdmin
-                .from("fastest_finger_attempts")
-                .select("player_id, response_time_ms, is_correct, players(name)")
-                .eq("fastest_finger_round_id", ffRound.id);
-            result.fastest_finger_attempts = (attempts || []).map((a) => ({
-                player_id: a.player_id,
-                name: (a.players as { name?: string })?.name || "Estudiante",
-                response_time_ms: a.response_time_ms,
-                is_correct: a.is_correct,
-            }));
-        }
+        const { attempts } = await loadFastestFingerAttempts(supabaseAdmin, effectiveRoundId);
+        result.fastest_finger_attempts = attempts;
     }
 
     // Última palabra usada en la pregunta actual (Clásico)
@@ -138,6 +132,12 @@ export const GET: APIRoute = async ({ locals, url }) => {
         const isClasico = (round?.events as { game_mode_id?: number })?.game_mode_id === 2;
 
         if (isClasico) {
+            result.current_question = await loadClasicoCurrentQuestion(
+                supabaseAdmin,
+                effectiveRoundId,
+                round.current_question_id
+            );
+
             const { data: sel } = await supabaseAdmin
                 .from("student_answer_selection")
                 .select("player_id, answer_id, players(name)")

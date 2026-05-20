@@ -1,0 +1,315 @@
+---
+import DashboardLayout from "@/layouts/DashboardLayout.astro";
+import EventosTabs from "@/components/EventosTabs.astro";
+import { Icon } from "astro-icon/components";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { getGameModeBadgeClass } from "@/lib/utils";
+import {
+    formatParticipantTime,
+    loadLaunchedSessionsHistory,
+    statusLabel,
+} from "@/lib/launchedSessionsHistory";
+
+const user = await Astro.locals.getUser();
+if (!user) return Astro.redirect("/");
+const { data: profile } = await Astro.locals.supabase
+    .from("players")
+    .select("role")
+    .eq("auth_user_id", user.id)
+    .single();
+if (profile?.role !== "admin" && profile?.role !== "docente" && profile?.role !== "preseleccion") {
+    return Astro.redirect("/dashboard");
+}
+
+const isPreseleccion = profile?.role === "preseleccion";
+const PAGE_SIZE = 15;
+const page = Math.max(1, parseInt(Astro.url.searchParams.get("page") || "1") || 1);
+const seasonId = Astro.url.searchParams.get("season_id")
+    ? parseInt(Astro.url.searchParams.get("season_id")!)
+    : null;
+const gameModeId = Astro.url.searchParams.get("game_mode_id")
+    ? parseInt(Astro.url.searchParams.get("game_mode_id")!)
+    : null;
+
+const { data: seasons } = await Astro.locals.supabase
+    .from("seasons")
+    .select("id, name")
+    .order("year", { ascending: false })
+    .order("semester", { ascending: false });
+
+const { data: modes } = await Astro.locals.supabase.from("game_modes").select("id, name");
+
+const { sessions, totalCount } = await loadLaunchedSessionsHistory(supabaseAdmin, {
+    page,
+    pageSize: PAGE_SIZE,
+    seasonId,
+    gameModeId: isPreseleccion ? 1 : gameModeId,
+    preseleccionOnly: isPreseleccion,
+});
+
+const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+const hasPrev = page > 1;
+const hasNext = page < totalPages;
+
+function buildUrl(p: number) {
+    const params = new URLSearchParams();
+    if (p > 1) params.set("page", String(p));
+    if (seasonId) params.set("season_id", String(seasonId));
+    if (gameModeId && !isPreseleccion) params.set("game_mode_id", String(gameModeId));
+    const q = params.toString();
+    return `/dashboard/eventos/historial${q ? `?${q}` : ""}`;
+}
+
+const pageNumbers: number[] = [];
+const show = Math.min(5, totalPages);
+if (totalPages <= 5) for (let i = 1; i <= totalPages; i++) pageNumbers.push(i);
+else if (page <= 3) for (let i = 1; i <= show; i++) pageNumbers.push(i);
+else if (page >= totalPages - 2) for (let i = totalPages - 4; i <= totalPages; i++) pageNumbers.push(i);
+else for (let i = page - 2; i <= page + 2; i++) pageNumbers.push(i);
+
+const statusBadge: Record<string, string> = {
+    waiting: "badge-ghost",
+    active: "badge-primary",
+    fastest_finger: "badge-success",
+    finished: "badge-neutral",
+};
+---
+
+<DashboardLayout title="Historial de sesiones">
+    <EventosTabs active="historial" />
+
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+        <div>
+            <h2 class="text-4xl font-black italic tracking-tighter uppercase text-slate-800">
+                Historial de sesiones
+            </h2>
+            <p class="text-slate-500 font-medium font-mono text-xs">
+                SALONES LANZADOS · PARTICIPANTES · GANADORES
+            </p>
+        </div>
+    </div>
+
+    <form method="get" class="flex flex-wrap gap-3 mb-8 items-end">
+        <div class="form-control">
+            <label class="label py-0">
+                <span class="label-text font-black text-[10px] uppercase text-slate-400">Temporada</span>
+            </label>
+            <select name="season_id" class="select select-bordered select-sm font-bold min-w-[180px]">
+                <option value="">Todas</option>
+                {seasons?.map((s) => (
+                    <option value={s.id} selected={seasonId === s.id}>
+                        {s.name}
+                    </option>
+                ))}
+            </select>
+        </div>
+        {!isPreseleccion && (
+            <div class="form-control">
+                <label class="label py-0">
+                    <span class="label-text font-black text-[10px] uppercase text-slate-400">Modo</span>
+                </label>
+                <select name="game_mode_id" class="select select-bordered select-sm font-bold min-w-[160px]">
+                    <option value="">Todos</option>
+                    {modes?.map((m) => (
+                        <option value={m.id} selected={gameModeId === m.id}>
+                            {m.name}
+                        </option>
+                    ))}
+                </select>
+            </div>
+        )}
+        <button type="submit" class="btn btn-primary btn-sm text-white font-bold uppercase text-[10px]">
+            Filtrar
+        </button>
+        {(seasonId || gameModeId) && (
+            <a href="/dashboard/eventos/historial" class="btn btn-ghost btn-sm">Limpiar</a>
+        )}
+    </form>
+
+    {sessions.length === 0 ? (
+        <div class="alert bg-base-200 border border-base-300">
+            <Icon name="lucide:info" class="w-5 h-5 shrink-0" />
+            <span>No hay sesiones lanzadas con los filtros seleccionados.</span>
+        </div>
+    ) : (
+        <div class="space-y-4">
+            {sessions.map((session) => (
+                <details class="group bg-white border border-base-300 rounded-2xl shadow-sm overflow-hidden">
+                    <summary class="cursor-pointer list-none p-5 hover:bg-base-100/80 transition-colors">
+                        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                            <div class="flex flex-wrap items-center gap-2 min-w-0">
+                                <span class={getGameModeBadgeClass(session.gameModeId)}>
+                                    {session.gameModeName}
+                                </span>
+                                <span
+                                    class:list={[
+                                        "badge badge-sm font-bold text-[9px] uppercase",
+                                        statusBadge[session.status] || "badge-ghost",
+                                    ]}
+                                >
+                                    {statusLabel(session.status)}
+                                </span>
+                                <p class="font-black text-slate-800 uppercase italic truncate">
+                                    {session.eventName}
+                                </p>
+                                <span class="text-xs text-slate-500 font-mono">
+                                    Salón: {session.classroomGroupId}
+                                </span>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-4 text-sm text-slate-600 shrink-0">
+                                <span class="font-mono font-bold">PIN {session.sessionPin}</span>
+                                <span>{session.seasonName}</span>
+                                <span class="text-[10px] uppercase font-black text-slate-400">
+                                    {session.sortTime
+                                        ? new Date(session.sortTime).toLocaleString("es-CO", {
+                                              dateStyle: "short",
+                                              timeStyle: "short",
+                                          })
+                                        : "Sin inicio registrado"}
+                                </span>
+                                <span class="badge badge-outline badge-sm">
+                                    {session.participants.length} participante
+                                    {session.participants.length === 1 ? "" : "s"}
+                                </span>
+                                <a
+                                    href={`/dashboard/eventos/control/${session.roundId}`}
+                                    class="btn btn-ghost btn-xs gap-1"
+                                    onclick="event.stopPropagation()"
+                                >
+                                    <Icon name="lucide:external-link" size={14} />
+                                    Panel
+                                </a>
+                            </div>
+                        </div>
+                    </summary>
+
+                    <div class="border-t border-base-200 px-5 pb-5">
+                        {session.participants.length === 0 ? (
+                            <p class="text-sm text-slate-500 py-4">Nadie se unió a esta sesión.</p>
+                        ) : (
+                            <div class="overflow-x-auto">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr class="bg-base-200/60">
+                                            <th class="font-black text-[10px] uppercase text-slate-500 w-12">
+                                                #
+                                            </th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500">
+                                                Participante
+                                            </th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500 text-right">
+                                                Puntaje
+                                            </th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500 text-right">
+                                                Tiempo
+                                            </th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500 text-center">
+                                                Ganador
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {session.participants.map((p) => (
+                                            <tr
+                                                class:list={[
+                                                    "border-b border-base-200 last:border-0",
+                                                    p.is_winner && "bg-amber-50/80",
+                                                ]}
+                                            >
+                                                <td class="font-mono font-bold text-slate-500">{p.rank}</td>
+                                                <td>
+                                                    <span class="font-bold text-slate-800">{p.name}</span>
+                                                    {p.is_finalist && !p.is_winner && (
+                                                        <span class="badge badge-primary badge-xs ml-2">
+                                                            Finalista
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td class="text-right font-mono tabular-nums">
+                                                    {session.gameModeId === 2
+                                                        ? new Intl.NumberFormat("es-CO", {
+                                                              maximumFractionDigits: 0,
+                                                          }).format(p.score)
+                                                        : p.score}
+                                                </td>
+                                                <td class="text-right font-mono tabular-nums text-slate-600">
+                                                    {formatParticipantTime(p.total_time_ms)}
+                                                    {p.total_time_ms != null && (
+                                                        <span class="text-[9px] text-slate-400 ml-0.5">s</span>
+                                                    )}
+                                                </td>
+                                                <td class="text-center">
+                                                    {p.is_winner ? (
+                                                        <span
+                                                            class="inline-flex items-center gap-1 text-amber-600 font-black text-[10px] uppercase"
+                                                            title="Ganador"
+                                                        >
+                                                            <Icon name="lucide:trophy" size={16} />
+                                                            Ganador
+                                                        </span>
+                                                    ) : (
+                                                        <span class="text-slate-300">—</span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </details>
+            ))}
+        </div>
+    )}
+
+    <div class="flex flex-col sm:flex-row items-center justify-between gap-4 mt-10 pt-6 border-t border-base-300">
+        <p class="text-sm text-slate-500 font-medium">
+            {totalCount === 0
+                ? "Sin sesiones"
+                : `Mostrando ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalCount)} de ${totalCount} sesiones`}
+        </p>
+        {totalPages > 1 && (
+            <div class="join">
+                <a
+                    href={hasPrev ? buildUrl(page - 1) : "#"}
+                    class:list={["join-item btn btn-sm", !hasPrev && "btn-disabled pointer-events-none"]}
+                    aria-label="Anterior"
+                >
+                    ‹
+                </a>
+                {pageNumbers.map((p) => (
+                    <a
+                        href={buildUrl(p)}
+                        class:list={["join-item btn btn-sm", p === page && "btn-primary"]}
+                    >
+                        {p}
+                    </a>
+                ))}
+                <a
+                    href={hasNext ? buildUrl(page + 1) : "#"}
+                    class:list={["join-item btn btn-sm", !hasNext && "btn-disabled pointer-events-none"]}
+                    aria-label="Siguiente"
+                >
+                    ›
+                </a>
+            </div>
+        )}
+    </div>
+</DashboardLayout>
+
+<style>
+    details > summary::-webkit-details-marker {
+        display: none;
+    }
+    details > summary::after {
+        content: "▸";
+        float: right;
+        font-size: 0.75rem;
+        color: rgb(100 116 139);
+        transition: transform 0.15s;
+    }
+    details[open] > summary::after {
+        transform: rotate(90deg);
+    }
+</style>

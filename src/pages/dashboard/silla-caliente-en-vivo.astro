@@ -1,0 +1,170 @@
+---
+import DashboardLayout from "@/layouts/DashboardLayout.astro";
+import { Icon } from "astro-icon/components";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { loadClasicoCurrentQuestion } from "@/lib/clasicoQuestionView";
+
+const user = await Astro.locals.getUser();
+if (!user) return Astro.redirect("/");
+
+const { data: profile } = await Astro.locals.supabase
+    .from("players")
+    .select("role")
+    .eq("auth_user_id", user.id)
+    .single();
+
+if (profile?.role !== "admin" && profile?.role !== "docente") {
+    return Astro.redirect("/dashboard");
+}
+
+const { data: activeRounds } = await supabaseAdmin
+    .from("event_rounds")
+    .select("id, event_id, session_pin, classroom_group_id, status, current_question_id, events(id, name, game_mode_id)")
+    .in("status", ["waiting", "active"])
+    .order("id", { ascending: false });
+
+type LiveSession = {
+    roundId: number;
+    eventName: string;
+    status: string;
+    pin: string;
+    group: string;
+    participantName: string | null;
+    question: Awaited<ReturnType<typeof loadClasicoCurrentQuestion>>;
+};
+
+const liveSessions: LiveSession[] = [];
+
+for (const r of activeRounds || []) {
+    const evt = r.events as { id?: number; name?: string; game_mode_id?: number } | null;
+    if (evt?.game_mode_id !== 2) continue;
+
+    let participantName: string | null = null;
+    if (evt?.id) {
+        const { data: ac } = await supabaseAdmin
+            .from("active_contestants")
+            .select("player_id")
+            .eq("event_id", evt.id)
+            .maybeSingle();
+        if (ac?.player_id) {
+            const { data: pl } = await supabaseAdmin.from("players").select("name").eq("id", ac.player_id).single();
+            participantName = pl?.name ?? null;
+        }
+    }
+
+    let question = null;
+    if (r.status === "active" && r.current_question_id) {
+        question = await loadClasicoCurrentQuestion(supabaseAdmin, r.id, r.current_question_id);
+    }
+
+    liveSessions.push({
+        roundId: r.id,
+        eventName: evt?.name || "Silla Caliente",
+        status: r.status || "waiting",
+        pin: r.session_pin || "—",
+        group: r.classroom_group_id || "—",
+        participantName,
+        question,
+    });
+}
+---
+
+<DashboardLayout title="Silla Caliente en vivo">
+    <div class="mb-8">
+        <h1 class="text-4xl font-black italic tracking-tighter text-slate-900 uppercase">
+            Silla Caliente <span class="text-amber-600">en vivo</span>
+        </h1>
+        <p class="text-slate-500 font-medium mt-1">
+            Sesiones activas ahora mismo. Pregunta y respuestas (solo personal docente).
+        </p>
+    </div>
+
+    {liveSessions.length === 0 ? (
+        <div class="alert bg-base-200 border border-base-300">
+            <Icon name="lucide:info" class="w-5 h-5" />
+            <span>No hay ninguna sesión de Silla Caliente en espera o en juego.</span>
+        </div>
+    ) : (
+        <div class="space-y-6">
+            {liveSessions.map((s) => (
+                <article class="bg-white rounded-3xl border border-slate-200 shadow-lg overflow-hidden">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 bg-slate-50 border-b border-slate-100">
+                        <div>
+                            <h2 class="text-xl font-black uppercase text-slate-800">{s.eventName}</h2>
+                            <p class="text-sm text-slate-500 mt-1">
+                                PIN <span class="font-mono font-bold">{s.pin}</span>
+                                · Salón {s.group}
+                                {s.participantName && (
+                                    <> · Concursante: <strong>{s.participantName}</strong></>
+                                )}
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-3 shrink-0">
+                            <span
+                                class:list={[
+                                    "badge font-black uppercase text-[10px]",
+                                    s.status === "active" ? "badge-warning" : "badge-ghost",
+                                ]}
+                            >
+                                {s.status === "active" ? "En juego" : "En espera"}
+                            </span>
+                            <a
+                                href={`/dashboard/eventos/control/${s.roundId}`}
+                                class="btn btn-primary btn-sm text-white font-bold"
+                            >
+                                Panel de control
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="p-6">
+                        {s.status === "active" && s.question ? (
+                            <>
+                                <p class="text-[10px] font-black uppercase text-slate-400 mb-2">Pregunta actual</p>
+                                <p class="text-lg font-bold text-slate-800 mb-4 leading-snug">{s.question.question_text}</p>
+                                {s.question.level_name && (
+                                    <p class="text-xs text-amber-700 font-bold mb-4">Nivel: {s.question.level_name}</p>
+                                )}
+                                <p class="text-[10px] font-black uppercase text-emerald-600 mb-2">Opciones (respuesta correcta marcada)</p>
+                                <ul class="space-y-2 max-w-3xl">
+                                    {s.question.answers.map((a) => (
+                                        <li
+                                            class:list={[
+                                                "p-3 rounded-xl border text-sm flex flex-wrap items-center gap-2",
+                                                a.is_correct
+                                                    ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                                                    : "bg-slate-50 border-slate-200 text-slate-700",
+                                            ]}
+                                        >
+                                            <span class="font-black text-base w-8">{a.letter}.</span>
+                                            <span class="flex-1">{a.answer_text}</span>
+                                            {a.is_correct && (
+                                                <span class="badge badge-success badge-sm font-black text-[9px] uppercase">
+                                                    Correcta
+                                                </span>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </>
+                        ) : s.status === "active" ? (
+                            <p class="text-slate-500 italic text-sm">En juego — aún no hay pregunta lanzada.</p>
+                        ) : (
+                            <p class="text-slate-500 italic text-sm">
+                                En espera del concursante. Abre el panel para lanzar la primera pregunta.
+                            </p>
+                        )}
+                    </div>
+                </article>
+            ))}
+        </div>
+    )}
+
+    <p class="text-xs text-slate-400 mt-8">
+        Se recarga automáticamente cada 15 segundos. El panel de control se actualiza en tiempo casi real.
+    </p>
+</DashboardLayout>
+
+<script is:inline>
+    setTimeout(function () { window.location.reload(); }, 15000);
+</script>

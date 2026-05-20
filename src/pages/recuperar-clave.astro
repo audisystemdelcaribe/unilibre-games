@@ -1,0 +1,65 @@
+---
+import "../styles/global.css";
+import { actions } from "astro:actions";
+
+const result = Astro.getActionResult(actions.requestPasswordReset);
+---
+
+<html lang="es">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width" />
+	<title>Recuperar contraseña - Unilibre Games</title>
+</head>
+<body class="bg-zinc-950 text-white flex min-h-screen items-center justify-center p-4">
+<div class="w-full max-w-sm">
+	<div class="text-center mb-8">
+		<h1 class="text-3xl font-black italic tracking-tighter text-unilibre-blue">
+			RECUPERAR <span class="text-unilibre-red font-normal">CLAVE</span>
+		</h1>
+		<p class="text-zinc-500 text-sm mt-2 font-medium uppercase tracking-widest">
+			Te enviaremos un enlace a tu correo institucional
+		</p>
+	</div>
+
+	<form method="POST" action={actions.requestPasswordReset} class="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl shadow-2xl space-y-5">
+		{result?.data?.success && (
+			<div class="bg-emerald-500/10 border border-emerald-500 text-emerald-400 text-xs p-3 rounded-lg font-bold text-center">
+				{result.data.message}
+			</div>
+		)}
+		{result?.error && (
+			<div class="bg-red-500/10 border border-red-500 text-red-500 text-xs p-3 rounded-lg font-bold text-center">
+				{result.error.message}
+			</div>
+		)}
+
+		<div class="space-y-2">
+			<label class="text-xs font-bold text-zinc-400 uppercase">Correo institucional</label>
+			<input
+				name="email"
+				type="text"
+				required
+				class="w-full bg-zinc-800 border-none rounded-xl p-3 focus:ring-2 focus:ring-unilibre-blue outline-none transition-all"
+				placeholder="usuario o usuario@unilibre.edu.co"
+				autocomplete="email"
+			/>
+			<p class="text-[11px] text-zinc-500">
+				Puedes escribir solo tu usuario; se completa con @unilibre.edu.co
+			</p>
+		</div>
+
+		<button
+			type="submit"
+			class="w-full bg-unilibre-blue hover:bg-blue-600 text-white font-black py-4 rounded-xl transition-all shadow-lg active:scale-95"
+		>
+			ENVIAR ENLACE
+		</button>
+
+		<p class="text-center text-zinc-500 text-sm">
+			<a href="/" class="text-unilibre-blue font-bold hover:underline">Volver al inicio de sesión</a>
+		</p>
+	</form>
+</div>
+</body>
+</html>

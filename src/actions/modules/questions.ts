@@ -1,7 +1,7 @@
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
-import { ensureAdmin } from '../utils';
+import { ensureAdmin, ensureQuestionManager } from '../utils';
 
 export const questionsActions = {
     saveQuestion: defineAction({
@@ -20,7 +20,7 @@ export const questionsActions = {
             correct_idx: z.string(),
         }),
         handler: async (input, context) => {
-            await ensureAdmin(context);
+            await ensureQuestionManager(context);
 
             const { id, subject_id, level_id, question_text, scope, faculty_id, program_id, min_semester, max_semester, ans_1, ans_2, ans_3, ans_4, correct_idx } = input;
 

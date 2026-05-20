@@ -1,0 +1,156 @@
+---
+import "../../styles/global.css";
+import { actions } from "astro:actions";
+import { PASSWORD_REQUIREMENTS_MSG } from "../../actions/modules/auth";
+
+const result = Astro.getActionResult(actions.completePasswordReset);
+
+let sessionError = "";
+const code = Astro.url.searchParams.get("code");
+const tokenHash = Astro.url.searchParams.get("token_hash");
+const type = Astro.url.searchParams.get("type");
+
+if (code) {
+	const { error } = await Astro.locals.supabase.auth.exchangeCodeForSession(code);
+	if (error) {
+		sessionError = "El enlace no es válido o ya expiró. Solicita uno nuevo.";
+	}
+} else if (tokenHash && type === "recovery") {
+	const { error } = await Astro.locals.supabase.auth.verifyOtp({
+		type: "recovery",
+		token_hash: tokenHash,
+	});
+	if (error) {
+		sessionError = "El enlace no es válido o ya expiró. Solicita uno nuevo.";
+	}
+}
+
+const {
+	data: { user },
+} = await Astro.locals.supabase.auth.getUser();
+const canReset = !!user && !sessionError;
+---
+
+<html lang="es">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width" />
+	<title>Nueva contraseña - Unilibre Games</title>
+</head>
+<body class="bg-zinc-950 text-white flex min-h-screen items-center justify-center p-4">
+<div class="w-full max-w-sm">
+	<div class="text-center mb-8">
+		<h1 class="text-3xl font-black italic tracking-tighter text-unilibre-blue">
+			NUEVA <span class="text-unilibre-red font-normal">CONTRASEÑA</span>
+		</h1>
+		<p class="text-zinc-500 text-sm mt-2 font-medium uppercase tracking-widest">
+			Elige una clave segura para tu cuenta
+		</p>
+	</div>
+
+	{result?.data?.success ? (
+		<div class="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl shadow-2xl space-y-5 text-center">
+			<div class="bg-emerald-500/10 border border-emerald-500 text-emerald-400 text-sm p-4 rounded-lg font-bold">
+				{result.data.message}
+			</div>
+			<a
+				href="/"
+				class="inline-block w-full bg-unilibre-blue hover:bg-blue-600 text-white font-black py-4 rounded-xl transition-all text-center"
+			>
+				INICIAR SESIÓN
+			</a>
+		</div>
+	) : canReset ? (
+		<form method="POST" action={actions.completePasswordReset} id="form-reset" class="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl shadow-2xl space-y-5">
+			{result?.error && (
+				<div class="bg-red-500/10 border border-red-500 text-red-500 text-xs p-3 rounded-lg font-bold text-center">
+					{result.error.message}
+				</div>
+			)}
+
+			<div class="space-y-2">
+				<label class="text-xs font-bold text-zinc-400 uppercase">Nueva contraseña</label>
+				<input
+					name="new_password"
+					type="password"
+					required
+					minlength="6"
+					autocomplete="new-password"
+					class="w-full bg-zinc-800 border-none rounded-xl p-3 focus:ring-2 focus:ring-unilibre-blue outline-none transition-all"
+				/>
+			</div>
+
+			<div class="space-y-2">
+				<label class="text-xs font-bold text-zinc-400 uppercase">Confirmar contraseña</label>
+				<input
+					name="confirm_password"
+					type="password"
+					required
+					minlength="6"
+					autocomplete="new-password"
+					class="w-full bg-zinc-800 border-none rounded-xl p-3 focus:ring-2 focus:ring-unilibre-blue outline-none transition-all"
+				/>
+			</div>
+
+			<p class="text-[11px] text-zinc-500">{PASSWORD_REQUIREMENTS_MSG}</p>
+
+			<button
+				type="submit"
+				class="w-full bg-unilibre-blue hover:bg-blue-600 text-white font-black py-4 rounded-xl transition-all shadow-lg active:scale-95"
+			>
+				GUARDAR CONTRASEÑA
+			</button>
+
+			<p class="text-center text-zinc-500 text-sm">
+				<a href="/recuperar-clave" class="text-unilibre-blue font-bold hover:underline">Solicitar otro enlace</a>
+			</p>
+		</form>
+	) : (
+		<div class="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl shadow-2xl space-y-5 text-center">
+			<div class="bg-red-500/10 border border-red-500 text-red-500 text-sm p-4 rounded-lg font-bold">
+				{sessionError || "Abre el enlace que recibiste por correo para establecer tu nueva contraseña."}
+			</div>
+			<a
+				href="/recuperar-clave"
+				class="inline-block w-full bg-unilibre-blue hover:bg-blue-600 text-white font-black py-4 rounded-xl transition-all text-center"
+			>
+				SOLICITAR ENLACE
+			</a>
+			<p class="text-center text-zinc-500 text-sm">
+				<a href="/" class="text-unilibre-blue font-bold hover:underline">Volver al inicio de sesión</a>
+			</p>
+		</div>
+	)}
+</div>
+
+<script>
+	document.getElementById("form-reset")?.addEventListener("submit", function (e) {
+		const form = e.currentTarget;
+		if (!(form instanceof HTMLFormElement)) return;
+		const np = form.querySelector('input[name="new_password"]');
+		const cp = form.querySelector('input[name="confirm_password"]');
+		if (np instanceof HTMLInputElement && cp instanceof HTMLInputElement && np.value !== cp.value) {
+			e.preventDefault();
+			alert("Las contraseñas no coinciden");
+		}
+	});
+
+	// Enlace con tokens en el hash (#access_token=...) — intercambio en el navegador
+	if (window.location.hash.includes("access_token")) {
+		const params = new URLSearchParams(window.location.hash.slice(1));
+		const accessToken = params.get("access_token");
+		const refreshToken = params.get("refresh_token");
+		const type = params.get("type");
+		if (accessToken && refreshToken && type === "recovery") {
+			fetch("/api/auth/recovery-session", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
+			}).then((r) => {
+				if (r.ok) window.location.replace("/recuperar-clave/nueva");
+			});
+		}
+	}
+</script>
+</body>
+</html>

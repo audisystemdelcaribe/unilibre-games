@@ -1,32 +1,39 @@
 import type { APIRoute } from "astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+    formatFastestTimeMs,
+    getProvisionalWinner,
+    loadFastestFingerAttempts,
+} from "@/lib/fastestFingerResults";
 
 /**
- * Devuelve si la ronda de Mente más Rápida terminó y si el usuario actual es el ganador.
+ * Estado de Mente más Rápida para el jugador: tiempo, ganador provisional y confirmación (Silla Caliente).
  */
 export const GET: APIRoute = async ({ url, locals }) => {
+    const empty = {
+        round_status: null as string | null,
+        finished: false,
+        isWinner: false,
+        is_provisional_winner: false,
+        my_time_ms: null as number | null,
+        my_time_sec: null as string | null,
+        my_correct: false,
+        provisional_winner_name: null as string | null,
+    };
+
     const user = await locals.getUser();
     if (!user) {
-        return new Response(JSON.stringify({ finished: false, isWinner: false }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-        });
+        return json(empty);
     }
 
     const roundId = url.searchParams.get("round_id");
     if (!roundId) {
-        return new Response(JSON.stringify({ finished: false, isWinner: false }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-        });
+        return json(empty);
     }
 
-    const rId = parseInt(roundId);
-    if (isNaN(rId)) {
-        return new Response(JSON.stringify({ finished: false, isWinner: false }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-        });
+    const rId = parseInt(roundId, 10);
+    if (!Number.isFinite(rId)) {
+        return json(empty);
     }
 
     const { data: player } = await supabaseAdmin
@@ -36,10 +43,7 @@ export const GET: APIRoute = async ({ url, locals }) => {
         .single();
 
     if (!player?.id) {
-        return new Response(JSON.stringify({ finished: false, isWinner: false }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-        });
+        return json(empty);
     }
 
     const { data: round } = await supabaseAdmin
@@ -48,11 +52,27 @@ export const GET: APIRoute = async ({ url, locals }) => {
         .eq("id", rId)
         .single();
 
-    if (!round || round.status !== "finished") {
-        return new Response(
-            JSON.stringify({ finished: false, isWinner: false }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-        );
+    if (!round) {
+        return json(empty);
+    }
+
+    const { attempts } = await loadFastestFingerAttempts(supabaseAdmin, rId);
+    const mine = attempts.find((a) => a.player_id === player.id);
+    const provisional = getProvisionalWinner(attempts);
+
+    const base = {
+        round_status: round.status,
+        finished: round.status === "finished",
+        isWinner: false,
+        is_provisional_winner: !!provisional && provisional.player_id === player.id,
+        my_time_ms: mine?.response_time_ms ?? null,
+        my_time_sec: mine != null ? formatFastestTimeMs(mine.response_time_ms) : null,
+        my_correct: !!mine?.is_correct,
+        provisional_winner_name: provisional?.name ?? null,
+    };
+
+    if (round.status !== "finished") {
+        return json(base);
     }
 
     const evt = round.events as {
@@ -63,10 +83,7 @@ export const GET: APIRoute = async ({ url, locals }) => {
     };
     const seasonId = evt?.season_id;
     if (!seasonId) {
-        return new Response(
-            JSON.stringify({ finished: true, isWinner: false }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-        );
+        return json({ ...base, finished: true });
     }
 
     let clasicoQuery = supabaseAdmin
@@ -86,10 +103,7 @@ export const GET: APIRoute = async ({ url, locals }) => {
     const { data: clasicoEvent } = await clasicoQuery.limit(1).maybeSingle();
 
     if (!clasicoEvent) {
-        return new Response(
-            JSON.stringify({ finished: true, isWinner: false }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-        );
+        return json({ ...base, finished: true });
     }
 
     const { data: ac } = await supabaseAdmin
@@ -100,8 +114,17 @@ export const GET: APIRoute = async ({ url, locals }) => {
 
     const isWinner = ac?.player_id === player.id;
 
-    return new Response(
-        JSON.stringify({ finished: true, isWinner }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    return json({
+        ...base,
+        finished: true,
+        isWinner,
+        is_provisional_winner: isWinner || base.is_provisional_winner,
+    });
 };
+
+function json(body: Record<string, unknown>) {
+    return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+    });
+}

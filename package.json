@@ -10,7 +10,9 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "db:export": "node scripts/export-supabase-data.mjs",
+    "db:import": "node scripts/import-supabase-data.mjs"
   },
   "dependencies": {
     "@astrojs/node": "^9.5.4",

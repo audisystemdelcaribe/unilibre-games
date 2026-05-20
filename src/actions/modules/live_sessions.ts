@@ -28,20 +28,20 @@ export const liveSessionsActions = {
             const { data: evt } = await supabaseAdmin.from('events').select('game_mode_id').eq('id', parseInt(event_id)).single();
             const gm = evt?.game_mode_id;
 
-            // Rol preseleccion: solo puede abrir sesiones de Preselección (game_mode_id = 1)
+            // Rol preseleccion: solo puede abrir sesiones de Preselecci?n (game_mode_id = 1)
             const user = await context.locals.getUser();
             const { data: myProfile } = await context.locals.supabase.from('players').select('role').eq('auth_user_id', user?.id).single();
             if (myProfile?.role === 'preseleccion' && gm !== 1) {
-                throw new Error("Tu rol solo permite realizar Preselección. No puedes abrir Mente más Rápida ni Silla Caliente.");
+                throw new Error("Tu rol solo permite realizar Preselecci?n. No puedes abrir Mente m?s R?pida ni Silla Caliente.");
             }
             const groupId = gm === 3 ? 'Gran Final' : gm === 2 ? 'Silla Caliente' : (classroom_group_id?.trim() || '');
             if (!groupId || groupId.length < 2) throw new Error("El nombre del grupo es obligatorio");
 
-            // 1. Generar un PIN aleatorio de 4 o 6 números
+            // 1. Generar un PIN aleatorio de 4 o 6 n?meros
             // Verificamos que no exista uno igual activo (opcional pero recomendado)
             const session_pin = Math.floor(1000 + Math.random() * 9000).toString();
 
-            // 2. Crear la fila en event_rounds que actuará como "Sala de espera"
+            // 2. Crear la fila en event_rounds que actuar? como "Sala de espera"
             const { data: round, error } = await supabaseAdmin
                 .from('event_rounds')
                 .insert([{
@@ -59,7 +59,7 @@ export const liveSessionsActions = {
 
             return {
                 success: true,
-                message: "¡Salón abierto con éxito!",
+                message: "?Sal?n abierto con ?xito!",
                 pin: session_pin,
                 round_id: round.id
             };
@@ -72,7 +72,7 @@ export const liveSessionsActions = {
             await ensureStaff(context);
 
             // 1. Cambiamos el estado a 'active'
-            // 2. Opcional: Aquí podrías elegir la primera pregunta aleatoria
+            // 2. Opcional: Aqu? podr?as elegir la primera pregunta aleatoria
             const { error } = await supabaseAdmin
                 .from('event_rounds')
                 .update({ status: 'active', round_number: 1 })
@@ -87,7 +87,7 @@ export const liveSessionsActions = {
         input: z.object({ pin: z.string(), as_audience: z.preprocess((v) => v === "true" || v === true, z.boolean()).optional() }),
         handler: async ({ pin, as_audience }, context) => {
             const user = await context.locals.getUser();
-            if (!user) throw new Error("Debes iniciar sesión");
+            if (!user) throw new Error("Debes iniciar sesi?n");
 
             // 1. Buscar la ronda por PIN (con evento y modo de juego)
             const { data: round } = await supabaseAdmin
@@ -96,7 +96,7 @@ export const liveSessionsActions = {
                 .eq('session_pin', pin)
                 .single();
 
-            if (!round) throw new Error("PIN no válido");
+            if (!round) throw new Error("PIN no v?lido");
 
             // 2. Buscar ID del jugador
             const { data: player } = await supabaseAdmin
@@ -117,7 +117,7 @@ export const liveSessionsActions = {
                 scope?: string;
             };
 
-            // Preselección por programa: solo estudiantes de ese programa (evita mezcla de salones)
+            // Preselecci?n por programa: solo estudiantes de ese programa (evita mezcla de salones)
             if (gameModeId === 1 && evt?.scope === 'program' && evt.program_id != null) {
                 const { data: pl } = await supabaseAdmin
                     .from('players')
@@ -131,23 +131,23 @@ export const liveSessionsActions = {
                     const progName = (pl.programs as { name?: string } | null)?.name;
                     throw new Error(
                         progName
-                            ? `Este salón es solo para el programa del evento. Tu perfil está en «${progName}».`
-                            : 'Este salón es solo para estudiantes del programa del evento.'
+                            ? `Este sal?n es solo para el programa del evento. Tu perfil est? en ?${progName}?.`
+                            : 'Este sal?n es solo para estudiantes del programa del evento.'
                     );
                 }
             }
 
-            // 2a. "Ayudar a participante": siempre ir como público
+            // 2a. "Ayudar a participante": siempre ir como p?blico
             if (as_audience) return { success: true, round_id: round.id, audience_only: true };
 
-            // 2b. Mente más Rápida: solo finalistas del evento Preselección (game_mode 1) misma temporada/ámbito
+            // 2b. Mente m?s R?pida: solo finalistas del evento Preselecci?n (game_mode 1) misma temporada/?mbito
             if (gameModeId === 3 || roundStatus === 'fastest_finger') {
                 const { isFinalistInPreseleccion } = await import('../../lib/preseleccionFinalist');
                 const isFinalist = await isFinalistInPreseleccion(supabaseAdmin, player.id, evt || {});
-                if (!isFinalist) throw new Error("Solo los finalistas (ganadores de preselección) pueden participar en Mente más Rápida.");
+                if (!isFinalist) throw new Error("Solo los finalistas (ganadores de preselecci?n) pueden participar en Mente m?s R?pida.");
             }
 
-            // 2c. Silla Caliente (Clásico=2): solo el ganador puede entrar con el PIN
+            // 2c. Silla Caliente (Cl?sico=2): solo el ganador puede entrar con el PIN
             if (gameModeId === 2) {
                 const { data: ac } = await supabaseAdmin
                     .from('active_contestants')
@@ -155,13 +155,13 @@ export const liveSessionsActions = {
                     .eq('event_id', round.event_id)
                     .maybeSingle();
                 if (!ac || ac.player_id !== player.id) {
-                    throw new Error("Solo el ganador de Mente más Rápida puede ingresar con este PIN. El público debe usar 'Ayudar a participante'.");
+                    throw new Error("Solo el ganador de Mente m?s R?pida puede ingresar con este PIN. El p?blico debe usar 'Ayudar a participante'.");
                 }
             }
 
-            // Preselección: no bloquear por sesión finalizada; el estudiante sigue hasta que el docente termine la ronda o no haya más preguntas.
+            // Preselecci?n: no bloquear por sesi?n finalizada; el estudiante sigue hasta que el docente termine la ronda o no haya m?s preguntas.
 
-            // 3. UPSERT DE SESIÓN. En preselección, si falla por duplicado (sesión con finished=true), reactivamos esa sesión.
+            // 3. UPSERT DE SESI?N. En preselecci?n, si falla por duplicado (sesi?n con finished=true), reactivamos esa sesi?n.
             let session: { id: string } | null = null;
             const payload = {
                 player_id: player.id,
@@ -187,7 +187,7 @@ export const liveSessionsActions = {
                         .eq('finished', true)
                         .select()
                         .maybeSingle();
-                    if (upErr) throw new Error("Error al crear sesión: " + sErr.message);
+                    if (upErr) throw new Error("Error al crear sesi?n: " + sErr.message);
                     if (updated) {
                         session = updated;
                     } else {
@@ -199,17 +199,17 @@ export const liveSessionsActions = {
                             .eq('finished', false)
                             .select()
                             .single();
-                        if (upErr2) throw new Error("Error al crear sesión: " + sErr.message);
+                        if (upErr2) throw new Error("Error al crear sesi?n: " + sErr.message);
                         session = updatedActive;
                     }
                 } else {
-                    throw new Error("Error al crear sesión: " + sErr.message);
+                    throw new Error("Error al crear sesi?n: " + sErr.message);
                 }
             } else {
                 session = upserted;
             }
 
-            // Asegurar round_id correcto (por si el upsert no actualizó la fila existente)
+            // Asegurar round_id correcto (por si el upsert no actualiz? la fila existente)
             await supabaseAdmin
                 .from('game_sessions')
                 .update({ round_id: round.id, finished: false, session_type: 'classroom' })
@@ -249,12 +249,12 @@ export const liveSessionsActions = {
             if (!r) throw new Error("Ronda no encontrada");
             const rGm = (r.events as { game_mode_id?: number })?.game_mode_id;
             const { data: np } = await context.locals.supabase.from('players').select('role').eq('auth_user_id', (await context.locals.getUser())?.id).single();
-            if (np?.role === 'preseleccion' && rGm !== 1) throw new Error("Tu rol solo permite Preselección.");
+            if (np?.role === 'preseleccion' && rGm !== 1) throw new Error("Tu rol solo permite Preselecci?n.");
             if (r.status === 'fastest_finger' || r.status === 'finished') {
-                throw new Error("No se puede lanzar pregunta en esta ronda. Confirma al ganador de Mente más Rápida para continuar.");
+                throw new Error("No se puede lanzar pregunta en esta ronda. Confirma al ganador de Mente m?s R?pida para continuar.");
             }
             if ((r.events as { game_mode_id?: number })?.game_mode_id === 3) {
-                throw new Error("En Mente más Rápida usa 'Confirmar ganador' para pasar a Silla Caliente.");
+                throw new Error("En Mente m?s R?pida usa 'Confirmar ganador' para pasar a Silla Caliente.");
             }
 
             const { data: question } = await supabaseAdmin
@@ -264,7 +264,7 @@ export const liveSessionsActions = {
                 .single();
             if (!question) throw new Error("Pregunta no encontrada");
             if (!questionMatchesEventScope(question, r.events as EventScope, scopeOptionsForGameMode(rGm))) {
-                throw new Error("Esta pregunta no pertenece al programa o ámbito de este evento.");
+                throw new Error("Esta pregunta no pertenece al programa o ?mbito de este evento.");
             }
 
             await markQuestionShown(rId, qId);
@@ -278,7 +278,7 @@ export const liveSessionsActions = {
                 .eq('id', rId);
 
             if (error) throw new Error(error.message);
-            return { success: true, message: "¡Pregunta lanzada a los estudiantes!" };
+            return { success: true, message: "?Pregunta lanzada a los estudiantes!" };
         }
     }),
     submitAnswer: defineAction({
@@ -292,15 +292,15 @@ export const liveSessionsActions = {
         handler: async (input, context) => {
             console.log('[submitAnswer] INICIO - input:', JSON.stringify(input));
             const user = await context.locals.getUser();
-            if (!user) throw new Error("Debes iniciar sesión");
+            if (!user) throw new Error("Debes iniciar sesi?n");
 
             const now = Date.now();
             const { round_id, question_id, answer_id, session_id } = input;
 
             const sessionIdNum = parseInt(session_id, 10);
-            if (isNaN(sessionIdNum)) throw new Error("Sesión inválida. Vuelve a unirte con el PIN.");
+            if (isNaN(sessionIdNum)) throw new Error("Sesi?n inv?lida. Vuelve a unirte con el PIN.");
 
-            // 1. Obtener datos (Carga rápida)
+            // 1. Obtener datos (Carga r?pida)
             const [roundRes, questionRes, answerRes, playerRes] = await Promise.all([
                 supabaseAdmin.from('event_rounds').select('*, events(game_mode_id, scope, program_id, faculty_id)').eq('id', parseInt(round_id)).single(),
                 supabaseAdmin.from('questions').select('*, game_levels(points, time_limit), scope, program_id, faculty_id').eq('id', parseInt(question_id)).single(),
@@ -314,8 +314,8 @@ export const liveSessionsActions = {
             // Validar que la respuesta pertenece a la pregunta y es la pregunta actual
             const qId = parseInt(question_id);
             if (!answerRes.data) throw new Error("Respuesta no encontrada");
-            if (answerRes.data.question_id !== qId) throw new Error("Respuesta inválida para esta pregunta");
-            if (roundRes.data?.current_question_id !== qId) throw new Error("Esta pregunta ya no está activa");
+            if (answerRes.data.question_id !== qId) throw new Error("Respuesta inv?lida para esta pregunta");
+            if (roundRes.data?.current_question_id !== qId) throw new Error("Esta pregunta ya no est? activa");
             if (!questionRes.data) throw new Error("Pregunta no encontrada");
             const gameModeId = (roundRes.data?.events as { game_mode_id?: number })?.game_mode_id;
             assertQuestionMatchesEventScope(
@@ -328,7 +328,7 @@ export const liveSessionsActions = {
             const limitMs = (gameModeId === 1 ? 30 : ((questionRes.data?.game_levels as any)?.time_limit || 30)) * 1000;
             const isCorrect = answerRes.data?.is_correct ?? false;
 
-            // Validar que la sesión pertenezca al jugador y al evento de la ronda (evitar IDOR)
+            // Validar que la sesi?n pertenezca al jugador y al evento de la ronda (evitar IDOR)
             const { data: gameSession } = await supabaseAdmin
                 .from('game_sessions')
                 .select('id, player_id, event_id')
@@ -337,10 +337,10 @@ export const liveSessionsActions = {
 
             if (!playerRes.data?.id) throw new Error("Jugador no encontrado");
             if (!gameSession || gameSession.player_id !== playerRes.data.id) {
-                throw new Error("Sesión de juego inválida");
+                throw new Error("Sesi?n de juego inv?lida");
             }
             if (gameSession.event_id !== roundRes.data.event_id) {
-                throw new Error("La sesión no corresponde a esta ronda");
+                throw new Error("La sesi?n no corresponde a esta ronda");
             }
 
             const isJuegoFinal = (roundRes.data?.events as { game_mode_id?: number })?.game_mode_id === 2;
@@ -351,7 +351,7 @@ export const liveSessionsActions = {
                     // Juego final: sin tiempo, puntos completos al ritmo del docente
                     points = base;
                 } else {
-                    // Preselección: más rápido = más puntos
+                    // Preselecci?n: m?s r?pido = m?s puntos
                     const ratio = Math.max(0, (limitMs - responseMs) / limitMs);
                     points = Math.round(base * (0.05 + (ratio * 0.95)));
                 }
@@ -381,7 +381,8 @@ export const liveSessionsActions = {
             });
 
             if (!saved.alreadyAnswered) {
-                if (points > 0) {
+                // Cl?sico: el premio en $ lo calcula verifyClasicoAnswer / retiro; no acumular puntos en score
+                if (points > 0 && !isJuegoFinal) {
                     await supabaseAdmin.rpc('registrar_puntaje_ganado', {
                         p_session_id: sessionIdNum,
                         p_event_id: roundRes.data.event_id,
@@ -404,7 +405,7 @@ export const liveSessionsActions = {
                 time: (responseMs / 1000).toFixed(2),
                 insertId: saved.insertId,
             };
-            console.log('[submitAnswer] ÉXITO - retornando:', resp);
+            console.log('[submitAnswer] ?XITO - retornando:', resp);
             return resp;
         }
     }),
@@ -415,10 +416,10 @@ export const liveSessionsActions = {
         input: z.object({ round_id: z.string() }),
         handler: async ({ round_id }, context) => {
             const user = await context.locals.getUser();
-            if (!user) throw new Error("Debes iniciar sesión");
+            if (!user) throw new Error("Debes iniciar sesi?n");
 
             const rId = parseInt(round_id);
-            if (!Number.isFinite(rId)) throw new Error("Ronda inválida");
+            if (!Number.isFinite(rId)) throw new Error("Ronda inv?lida");
 
             const { data: player } = await supabaseAdmin.from('players').select('id').eq('auth_user_id', user.id).single();
             if (!player) throw new Error("Jugador no encontrado");
@@ -433,17 +434,18 @@ export const liveSessionsActions = {
                 throw new Error("Solo puedes retirarte en Silla Caliente");
             }
             if (round.status === 'finished') {
-                throw new Error("Esta ronda ya terminó");
+                throw new Error("Esta ronda ya termin?");
             }
 
             const { data: ac } = await supabaseAdmin.from('active_contestants').select('player_id').eq('event_id', round.event_id).maybeSingle();
             if (!ac || ac.player_id !== player.id) {
-                throw new Error("Solo el participante que está en la silla puede retirarse");
+                throw new Error("Solo el participante que est? en la silla puede retirarse");
             }
 
-            const { data: gs } = await supabaseAdmin.from('game_sessions').select('id, score').eq('player_id', player.id).eq('event_id', round.event_id).eq('finished', false).maybeSingle();
-            const { data: ep } = await supabaseAdmin.from('event_players').select('score').eq('event_id', round.event_id).eq('player_id', player.id).eq('classroom_group_id', round.classroom_group_id ?? '').maybeSingle();
-            const accumulatedScore = gs?.score ?? ep?.score ?? 0;
+            const { computeClasicoSafePrize } = await import('../../lib/clasicoPrize');
+            const { prizeMoney: accumulatedScore } = await computeClasicoSafePrize(supabaseAdmin, rId, player.id);
+
+            const { data: gs } = await supabaseAdmin.from('game_sessions').select('id').eq('player_id', player.id).eq('event_id', round.event_id).eq('finished', false).maybeSingle();
 
             if (gs) {
                 await supabaseAdmin.from('game_sessions').update({ score: accumulatedScore, finished: true }).eq('id', gs.id);
@@ -483,34 +485,23 @@ export const liveSessionsActions = {
             const gameModeId = (round.events as { game_mode_id?: number })?.game_mode_id;
             const { data: myProfile } = await context.locals.supabase.from('players').select('role').eq('auth_user_id', (await context.locals.getUser())?.id).single();
             if (myProfile?.role === 'preseleccion' && gameModeId !== 1) {
-                throw new Error("Tu rol solo permite Preselección.");
+                throw new Error("Tu rol solo permite Preselecci?n.");
             }
             if (gameModeId === 3) {
-                throw new Error("En Mente más Rápida no se lanzan preguntas. Usa 'Confirmar ganador' para pasar a Silla Caliente.");
+                throw new Error("En Mente m?s R?pida no se lanzan preguntas. Usa 'Confirmar ganador' para pasar a Silla Caliente.");
             }
             if (round.status === 'fastest_finger') {
-                throw new Error("La ronda está en Mente más Rápida. Confirma al ganador para continuar a Silla Caliente.");
+                throw new Error("La ronda est? en Mente m?s R?pida. Confirma al ganador para continuar a Silla Caliente.");
             }
             if (round.status === 'finished') {
-                throw new Error("Esta ronda ya terminó. Abre la ronda de Silla Caliente para continuar.");
+                throw new Error("Esta ronda ya termin?. Abre la ronda de Silla Caliente para continuar.");
             }
 
-            // 1b. Silla Caliente: obtener semestre del concursante activo para filtrar preguntas
-            let playerSemester: number | null = null;
+            // 1b. Silla Caliente: perfil del concursante (semestre, programa, facultad)
+            let clasicoContestant: Awaited<ReturnType<typeof import('../../lib/clasicoQuestionFilters').loadClasicoContestant>> = null;
             if (gameModeId === 2) {
-                const { data: ac } = await supabaseAdmin
-                    .from('active_contestants')
-                    .select('player_id')
-                    .eq('event_id', round.event_id)
-                    .maybeSingle();
-                if (ac?.player_id) {
-                    const { data: pl } = await supabaseAdmin
-                        .from('players')
-                        .select('semester')
-                        .eq('id', ac.player_id)
-                        .single();
-                    if (pl?.semester != null) playerSemester = pl.semester;
-                }
+                const { loadClasicoContestant } = await import('../../lib/clasicoQuestionFilters');
+                clasicoContestant = await loadClasicoContestant(supabaseAdmin, round.event_id);
             }
 
             // 2. Preguntas ya usadas: round_questions_shown (o fallback a game_answers)
@@ -546,24 +537,20 @@ export const liveSessionsActions = {
 
             let query = supabaseAdmin
                 .from('questions')
-                .select('id, scope, program_id, faculty_id')
+                .select('id, scope, program_id, faculty_id, min_semester, max_semester')
                 .eq('level_id', firstLevelId)
                 .eq('active', true);
-            query = applyScopeFilter(query, round.events as EventScope);
 
-            // Silla Caliente: solo preguntas cuyo rango [min_semester, max_semester] incluya el semestre del estudiante
-            if (playerSemester != null) {
-                query = query.lte('min_semester', playerSemester).gte('max_semester', playerSemester);
+            let availableIds: number[];
+            if (gameModeId === 2 && clasicoContestant) {
+                const { fetchClasicoQuestionIds } = await import('../../lib/clasicoQuestionFilters');
+                availableIds = await fetchClasicoQuestionIds(supabaseAdmin, clasicoContestant, firstLevelId, usedIds);
+            } else {
+                query = applyScopeFilter(query, round.events as EventScope);
+                const { data: allMatching } = await query;
+                const scoped = filterQuestionsByEventScope(allMatching || [], round.events as EventScope, scopeOpts);
+                availableIds = scoped.map((q) => q.id).filter((id: number) => !usedIds.includes(id));
             }
-
-            const { data: allMatching } = await query;
-
-            const scoped = filterQuestionsByEventScope(allMatching || [], round.events as EventScope, scopeOpts);
-
-            // Filtrar en JS para garantizar que NUNCA repetimos (más fiable que .not() de Supabase)
-            const availableIds = scoped
-                .map((q) => q.id)
-                .filter((id: number) => !usedIds.includes(id));
 
             if (availableIds.length === 0) {
                 const evtScope = normalizeEventScope(round.events as EventScope);
@@ -574,10 +561,10 @@ export const liveSessionsActions = {
                           ? ' para esta facultad'
                           : '';
                 const semHint = playerSemester != null ? ` (semestre ${playerSemester} o compatible)` : '';
-                throw new Error(`¡Se agotaron las preguntas de este nivel${scopeHint} para esta sesión${semHint}! Puedes finalizar el juego o agregar más preguntas de Nivel 1.`);
+                throw new Error(`?Se agotaron las preguntas de este nivel${scopeHint} para esta sesi?n${semHint}! Puedes finalizar el juego o agregar m?s preguntas de Nivel 1.`);
             }
 
-            // 4. Azar y actualización (solo de las no usadas)
+            // 4. Azar y actualizaci?n (solo de las no usadas)
             const chosenId = availableIds[Math.floor(Math.random() * availableIds.length)];
             const randomQ = scoped.find((q) => q.id === chosenId);
 
@@ -617,7 +604,7 @@ export const liveSessionsActions = {
                 .limit(1)
                 .single();
 
-            if (!sel) throw new Error("El estudiante no ha marcado ninguna opción");
+            if (!sel) throw new Error("El estudiante no ha marcado ninguna opci?n");
 
             const { data: answer } = await supabaseAdmin.from('answers').select('is_correct').eq('id', sel.answer_id).single();
             if (!answer) throw new Error("Respuesta no encontrada");
@@ -631,12 +618,12 @@ export const liveSessionsActions = {
             const gm = (roundFull.events as { game_mode_id?: number })?.game_mode_id;
             const isPreseleccion = gm === 1;
             const { data: vp } = await context.locals.supabase.from('players').select('role').eq('auth_user_id', (await context.locals.getUser())?.id).single();
-            if (vp?.role === 'preseleccion' && gm !== 1) throw new Error("Tu rol solo permite Preselección.");
+            if (vp?.role === 'preseleccion' && gm !== 1) throw new Error("Tu rol solo permite Preselecci?n.");
 
             const { data: question } = await supabaseAdmin.from('questions').select('level_id').eq('id', round.current_question_id).single();
             const { data: level } = await supabaseAdmin.from('game_levels').select('id, money_value, points, difficulty_order').eq('id', question?.level_id || 1).single();
             const { data: gameSession } = await supabaseAdmin.from('game_sessions').select('id').eq('player_id', sel.player_id).eq('event_id', roundFull.event_id).eq('finished', false).maybeSingle();
-            if (!gameSession) throw new Error("Sesión de juego no encontrada");
+            if (!gameSession) throw new Error("Sesi?n de juego no encontrada");
 
             if (correct) {
                 await supabaseAdmin.rpc('insert_game_answer', { p_game_session_id: gameSession.id, p_round_id: rId, p_event_id: roundFull.event_id, p_player_id: sel.player_id, p_classroom_group_id: roundFull.classroom_group_id ?? '', p_question_id: round.current_question_id, p_answer_id: sel.answer_id, p_is_correct: true, p_response_time_ms: 0, p_money_at_question: level?.points || 1000, p_level_id: question?.level_id || 1 });
@@ -661,17 +648,23 @@ export const liveSessionsActions = {
                         await supabaseAdmin.from('season_rankings').insert({ season_id: seasonId, player_id: sel.player_id, score: winPrize, position: (count ?? 0) + 1 });
                     }
                     await supabaseAdmin.from('event_rounds').update({ status: 'finished', verification_result: verificationResult }).eq('id', rId);
-                    return { success: true, message: "¡Correcto! No hay más preguntas. ¡Ganó!", finished: true };
+                    return { success: true, message: "?Correcto! No hay m?s preguntas. ?Gan?!", finished: true };
                 }
-                // Silla Caliente: filtrar por semestre del estudiante (min_semester <= semestre <= max_semester)
-                const { data: plSem } = await supabaseAdmin.from('players').select('semester').eq('id', sel.player_id).single();
-                const playerSemester = plSem?.semester ?? null;
-
-                let query = supabaseAdmin.from('questions').select('id').eq('level_id', nextLevelId).eq('active', true);
-                query = applyScopeFilter(query, roundFull.events as EventScope);
-                if (playerSemester != null) query = query.lte('min_semester', playerSemester).gte('max_semester', playerSemester);
-                const { data: available } = await query;
-                const availableIds = (available || []).map((q: any) => q.id).filter((id: number) => !usedIds.includes(id));
+                let availableIds: number[];
+                if (gm === 2) {
+                    const { loadContestantByPlayerId, fetchClasicoQuestionIds } = await import('../../lib/clasicoQuestionFilters');
+                    const contestant = await loadContestantByPlayerId(supabaseAdmin, sel.player_id);
+                    availableIds = contestant
+                        ? await fetchClasicoQuestionIds(supabaseAdmin, contestant, nextLevelId, usedIds)
+                        : [];
+                } else {
+                    let query = supabaseAdmin.from('questions').select('id, scope, program_id, faculty_id').eq('level_id', nextLevelId).eq('active', true);
+                    query = applyScopeFilter(query, roundFull.events as EventScope);
+                    const { data: available } = await query;
+                    const scopeOpts = scopeOptionsForGameMode(gm);
+                    const scoped = filterQuestionsByEventScope(available || [], roundFull.events as EventScope, scopeOpts);
+                    availableIds = scoped.map((q) => q.id).filter((id: number) => !usedIds.includes(id));
+                }
                 if (availableIds.length === 0) {
                     const winPrize = level?.money_value ?? level?.points ?? 0;
                     await supabaseAdmin.from('game_sessions').update({ score: winPrize, finished: true }).eq('id', gameSession.id);
@@ -684,32 +677,32 @@ export const liveSessionsActions = {
                         await supabaseAdmin.from('season_rankings').insert({ season_id: seasonId, player_id: sel.player_id, score: winPrize, position: (count ?? 0) + 1 });
                     }
                     await supabaseAdmin.from('event_rounds').update({ status: 'finished', verification_result: verificationResult }).eq('id', rId);
-                    return { success: true, message: "¡Correcto! No hay más preguntas. ¡Ganó!", finished: true };
+                    return { success: true, message: "?Correcto! No hay m?s preguntas. ?Gan?!", finished: true };
                 }
                 const chosenId = availableIds[Math.floor(Math.random() * availableIds.length)];
                 const { data: verifyQ } = await supabaseAdmin.from('questions').select('level_id').eq('id', chosenId).single();
                 if (!verifyQ || verifyQ.level_id !== nextLevelId) throw new Error("Error al seleccionar pregunta del nivel correcto.");
                 await markQuestionShown(rId, chosenId);
                 await supabaseAdmin.from('event_rounds').update({ current_question_id: chosenId, question_started_at: new Date().toISOString(), verification_result: verificationResult }).eq('id', rId);
-                return { success: true, message: "¡Correcto! Siguiente nivel." };
+                const { computeClasicoSafePrize } = await import('../../lib/clasicoPrize');
+                const { prizeMoney: banked } = await computeClasicoSafePrize(supabaseAdmin, rId, sel.player_id);
+                await supabaseAdmin.from('game_sessions').update({ score: banked }).eq('id', gameSession.id);
+                await supabaseAdmin.from('event_players').update({ score: banked }).eq('event_id', roundFull.event_id).eq('player_id', sel.player_id).eq('classroom_group_id', roundFull.classroom_group_id ?? '');
+                return { success: true, message: "?Correcto! Siguiente nivel." };
             } else {
                 // Respuesta incorrecta
                 await supabaseAdmin.rpc('insert_game_answer', { p_game_session_id: gameSession.id, p_round_id: rId, p_event_id: roundFull.event_id, p_player_id: sel.player_id, p_classroom_group_id: roundFull.classroom_group_id ?? '', p_question_id: round.current_question_id, p_answer_id: sel.answer_id, p_is_correct: false, p_response_time_ms: 0, p_money_at_question: 0, p_level_id: question?.level_id || 1 });
                 await supabaseAdmin.from('student_answer_selection').delete().eq('round_id', rId).eq('question_id', round.current_question_id);
 
                 if (isPreseleccion) {
-                    // Preselección: no sacar al estudiante; no marcar sesión ni ronda como terminadas
+                    // Preselecci?n: no sacar al estudiante; no marcar sesi?n ni ronda como terminadas
                     await supabaseAdmin.from('event_rounds').update({ verification_result: verificationResult }).eq('id', rId);
                     return { success: true, message: "Incorrecto. Sigue participando.", finished: false };
                 }
 
-                // Clásico (Silla Caliente): premio por seguros y terminar sesión
-                const { data: allLevels } = await supabaseAdmin.from('game_levels').select('id, difficulty_order, money_value, is_safe_level').order('difficulty_order', { ascending: true });
-                const currentOrder = allLevels?.find((l: any) => l.id === question?.level_id)?.difficulty_order ?? 1;
-                const levelsPassed = (allLevels || []).filter((l: any) => l.difficulty_order < currentOrder);
-                const safeLevelsPassed = levelsPassed.filter((l: any) => l.is_safe_level);
-                let prizeMoney = 0;
-                if (safeLevelsPassed.length > 0) prizeMoney = safeLevelsPassed[safeLevelsPassed.length - 1].money_value || 0;
+                // Cl?sico (Silla Caliente): premio por seguros y terminar sesi?n
+                const { computeClasicoSafePrize } = await import('../../lib/clasicoPrize');
+                const { prizeMoney } = await computeClasicoSafePrize(supabaseAdmin, rId, sel.player_id);
                 await supabaseAdmin.from('game_sessions').update({ score: prizeMoney, finished: true }).eq('id', gameSession.id);
                 await supabaseAdmin.from('event_players').update({ score: prizeMoney, stage: 'finished' }).eq('event_id', roundFull.event_id).eq('player_id', sel.player_id).eq('classroom_group_id', roundFull.classroom_group_id ?? '');
                 const { data: ranked } = await supabaseAdmin.from('event_players').select('player_id').eq('event_id', roundFull.event_id).eq('classroom_group_id', roundFull.classroom_group_id ?? '').order('score', { ascending: false }).order('total_time_ms', { ascending: true }).order('player_id', { ascending: true });
@@ -731,7 +724,7 @@ export const liveSessionsActions = {
             is_correct: z.enum(['true', 'false']),
         }),
         handler: async ({ round_id, is_correct }, context) => {
-            await ensureStaffFull(context); // Clásico: preseleccion no puede
+            await ensureStaffFull(context); // Cl?sico: preseleccion no puede
 
             const rId = parseInt(round_id);
             const correct = is_correct === 'true';
@@ -753,7 +746,7 @@ export const liveSessionsActions = {
                 .limit(1)
                 .single();
 
-            if (!sel) throw new Error("El estudiante no ha marcado ninguna opción");
+            if (!sel) throw new Error("El estudiante no ha marcado ninguna opci?n");
 
             const { data: question } = await supabaseAdmin
                 .from('questions')
@@ -781,7 +774,7 @@ export const liveSessionsActions = {
                 .eq('finished', false)
                 .maybeSingle();
 
-            if (!gameSession) throw new Error("Sesión de juego no encontrada");
+            if (!gameSession) throw new Error("Sesi?n de juego no encontrada");
 
             if (correct) {
                 // Registrar respuesta correcta
@@ -823,7 +816,7 @@ export const liveSessionsActions = {
                 if (shown?.length) usedIds = shown.map((s: any) => s.question_id).filter(Boolean);
                 usedIds.push(round.current_question_id);
 
-                // Si no hay siguiente nivel o no hay preguntas para ese nivel → ganó
+                // Si no hay siguiente nivel o no hay preguntas para ese nivel ? gan?
                 if (!nextLevelId) {
                     const winPrize = level?.money_value ?? level?.points ?? 0;
                     await supabaseAdmin.from('game_sessions').update({ score: winPrize, finished: true }).eq('id', gameSession.id);
@@ -840,19 +833,14 @@ export const liveSessionsActions = {
                         await supabaseAdmin.from('season_rankings').insert({ season_id: seasonId, player_id: sel.player_id, score: winPrize, position: (count ?? 0) + 1 });
                     }
                     await supabaseAdmin.from('event_rounds').update({ status: 'finished' }).eq('id', rId);
-                    return { success: true, message: "¡Correcto! No hay más preguntas. ¡Ganó!", finished: true };
+                    return { success: true, message: "?Correcto! No hay m?s preguntas. ?Gan?!", finished: true };
                 }
 
-                // Silla Caliente: filtrar por semestre del estudiante (min_semester <= semestre <= max_semester)
-                const { data: plSem } = await supabaseAdmin.from('players').select('semester').eq('id', sel.player_id).single();
-                const playerSemester = plSem?.semester ?? null;
-
-                let query = supabaseAdmin.from('questions').select('id').eq('level_id', nextLevelId).eq('active', true);
-                query = applyScopeFilter(query, round.events as EventScope);
-                if (playerSemester != null) query = query.lte('min_semester', playerSemester).gte('max_semester', playerSemester);
-                const { data: available } = await query;
-
-                const availableIds = (available || []).map((q: any) => q.id).filter((id: number) => !usedIds.includes(id));
+                const { loadContestantByPlayerId, fetchClasicoQuestionIds } = await import('../../lib/clasicoQuestionFilters');
+                const contestant = await loadContestantByPlayerId(supabaseAdmin, sel.player_id);
+                const availableIds = contestant
+                    ? await fetchClasicoQuestionIds(supabaseAdmin, contestant, nextLevelId, usedIds)
+                    : [];
 
                 if (availableIds.length === 0) {
                     // No hay preguntas para el siguiente nivel: usa el premio del nivel actual
@@ -871,7 +859,7 @@ export const liveSessionsActions = {
                         await supabaseAdmin.from('season_rankings').insert({ season_id: seasonId, player_id: sel.player_id, score: winPrize, position: (count ?? 0) + 1 });
                     }
                     await supabaseAdmin.from('event_rounds').update({ status: 'finished' }).eq('id', rId);
-                    return { success: true, message: "¡Correcto! No hay más preguntas. ¡Ganó!", finished: true };
+                    return { success: true, message: "?Correcto! No hay m?s preguntas. ?Gan?!", finished: true };
                 }
 
                 const chosenId = availableIds[Math.floor(Math.random() * availableIds.length)];
@@ -886,7 +874,12 @@ export const liveSessionsActions = {
                     question_started_at: new Date().toISOString(),
                 }).eq('id', rId);
 
-                return { success: true, message: "¡Correcto! Siguiente nivel." };
+                const { computeClasicoSafePrize: computePrize } = await import('../../lib/clasicoPrize');
+                const { prizeMoney: banked } = await computePrize(supabaseAdmin, rId, sel.player_id);
+                await supabaseAdmin.from('game_sessions').update({ score: banked }).eq('id', gameSession.id);
+                await supabaseAdmin.from('event_players').update({ score: banked }).eq('event_id', round.event_id).eq('player_id', sel.player_id).eq('classroom_group_id', round.classroom_group_id ?? '');
+
+                return { success: true, message: "?Correcto! Siguiente nivel." };
             } else {
                 // Respuesta incorrecta
                 await supabaseAdmin.rpc('insert_game_answer', {
@@ -905,25 +898,13 @@ export const liveSessionsActions = {
                 await supabaseAdmin.from('student_answer_selection').delete().eq('round_id', rId).eq('question_id', round.current_question_id);
 
                 if (isPreseleccionEval) {
-                    // Preselección: no sacar al estudiante; no marcar sesión ni ronda como terminadas
+                    // Preselecci?n: no sacar al estudiante; no marcar sesi?n ni ronda como terminadas
                     return { success: true, message: "Incorrecto. Sigue participando.", finished: false };
                 }
 
-                // Clásico: premio por seguros y terminar sesión
-                const { data: allLevels } = await supabaseAdmin
-                    .from('game_levels')
-                    .select('id, difficulty_order, money_value, is_safe_level')
-                    .order('difficulty_order', { ascending: true });
-
-                const currentOrder = allLevels?.find((l: any) => l.id === question?.level_id)?.difficulty_order ?? 1;
-                const levelsPassed = (allLevels || []).filter((l: any) => l.difficulty_order < currentOrder);
-                const safeLevelsPassed = levelsPassed.filter((l: any) => l.is_safe_level);
-
-                let prizeMoney = 0;
-                if (safeLevelsPassed.length > 0) {
-                    const lastSafe = safeLevelsPassed[safeLevelsPassed.length - 1];
-                    prizeMoney = lastSafe.money_value || 0;
-                }
+                // Cl?sico: premio por seguros y terminar sesi?n
+                const { computeClasicoSafePrize } = await import('../../lib/clasicoPrize');
+                const { prizeMoney } = await computeClasicoSafePrize(supabaseAdmin, rId, sel.player_id);
 
                 await supabaseAdmin.from('game_sessions').update({ score: prizeMoney, finished: true }).eq('id', gameSession.id);
                 await supabaseAdmin.from('event_players').update({ score: prizeMoney, stage: 'finished' }).eq('event_id', round.event_id).eq('player_id', sel.player_id).eq('classroom_group_id', round.classroom_group_id ?? '');
@@ -965,17 +946,18 @@ export const liveSessionsActions = {
             const evt = round.events as { game_mode_id?: number; season_id?: number } | null;
             const gameModeId = evt?.game_mode_id;
             const { data: fp } = await context.locals.supabase.from('players').select('role').eq('auth_user_id', (await context.locals.getUser())?.id).single();
-            if (fp?.role === 'preseleccion' && gameModeId !== 1) throw new Error("Tu rol solo permite Preselección.");
+            if (fp?.role === 'preseleccion' && gameModeId !== 1) throw new Error("Tu rol solo permite Preselecci?n.");
 
             const isClasico = gameModeId === 2;
 
-            // Si es Clásico (Silla Caliente): marcar game_sessions y event_players del participante activo
+            // Si es Cl?sico (Silla Caliente): marcar game_sessions y event_players del participante activo
             if (isClasico) {
                 const { data: ac } = await supabaseAdmin.from('active_contestants').select('player_id').eq('event_id', round.event_id).maybeSingle();
                 if (ac?.player_id) {
-                    const { data: gs } = await supabaseAdmin.from('game_sessions').select('id, score').eq('player_id', ac.player_id).eq('event_id', round.event_id).eq('finished', false).maybeSingle();
-                    const { data: ep } = await supabaseAdmin.from('event_players').select('score').eq('event_id', round.event_id).eq('player_id', ac.player_id).eq('classroom_group_id', round.classroom_group_id ?? '').maybeSingle();
-                    const finalScore = gs?.score ?? ep?.score ?? 0;
+                    const { computeClasicoSafePrize } = await import('../../lib/clasicoPrize');
+                    const { prizeMoney: finalScore } = await computeClasicoSafePrize(supabaseAdmin, rId, ac.player_id);
+
+                    const { data: gs } = await supabaseAdmin.from('game_sessions').select('id').eq('player_id', ac.player_id).eq('event_id', round.event_id).eq('finished', false).maybeSingle();
 
                     if (gs) {
                         await supabaseAdmin.from('game_sessions').update({ score: finalScore, finished: true }).eq('id', gs.id);
@@ -1027,7 +1009,7 @@ export const liveSessionsActions = {
 
             const isMenteRapida = evt?.game_mode_id === 3;
             if (isMenteRapida) {
-                // Transición a Mente más Rápida (fastest_finger) tras preselección
+                // Transici?n a Mente m?s R?pida (fastest_finger) tras preselecci?n
                 const { data: allSeqs } = await supabaseAdmin.from('fastest_finger_sequences').select('id');
                 if (allSeqs?.length) {
                     const seqId = allSeqs[Math.floor(Math.random() * allSeqs.length)].id;
@@ -1039,7 +1021,7 @@ export const liveSessionsActions = {
                     }
                     const { error: err } = await supabaseAdmin.from('event_rounds').update({ status: 'fastest_finger', question_started_at: new Date().toISOString() }).eq('id', rId);
                     if (err) throw new Error(err.message);
-                    return { success: true, message: "Preselección finalizada. ¡Mente más Rápida activada!" };
+                    return { success: true, message: "Preselecci?n finalizada. ?Mente m?s R?pida activada!" };
                 }
             }
 

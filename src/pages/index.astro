@@ -1,6 +1,7 @@
 ---
 import "../styles/global.css";
 import { checkLoginRateLimit, recordLoginFailure } from "../lib/rateLimit";
+import { normalizeInstitutionalEmail } from "../lib/institutionalEmail";
 
 let errorMessage = "";
 
@@ -16,20 +17,13 @@ if (Astro.request.method === "POST") {
 			const password = formData.get("password")?.toString();
 
 			if (rawEmail && password) {
-				let email = rawEmail.trim().toLowerCase();
-
-				// Si el usuario no escribe dominio, asumir @unilibre.edu.co
-				if (!email.includes("@")) {
-					email = `${email}@unilibre.edu.co`;
-				}
-
-				// Si escribe otro dominio diferente, no intentamos loguear
-				if (!email.endsWith("@unilibre.edu.co")) {
+				const normalized = normalizeInstitutionalEmail(rawEmail);
+				if ("error" in normalized) {
 					recordLoginFailure(Astro.request);
-					errorMessage = "Debes usar tu correo institucional (@unilibre.edu.co)";
+					errorMessage = normalized.error;
 				} else {
 					const { error } = await Astro.locals.supabase.auth.signInWithPassword({
-						email,
+						email: normalized.email,
 						password,
 					});
 
@@ -185,6 +179,10 @@ if (Astro.request.method === "POST") {
 			<span id="login-btn-text">INICIAR SESIÓN</span>
 			<span id="login-btn-spinner" class="hidden w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
 		</button>
+
+		<p class="text-center text-zinc-500 text-sm">
+			<a href="/recuperar-clave" class="text-unilibre-blue font-bold hover:underline">¿Olvidaste tu contraseña?</a>
+		</p>
 
 		<p class="text-center text-zinc-500 text-sm mt-4">
 			¿No tienes cuenta? <a href="/registro" class="text-unilibre-blue font-bold hover:underline">Regístrate</a>
