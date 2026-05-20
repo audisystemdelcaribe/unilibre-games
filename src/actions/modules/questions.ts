@@ -1,7 +1,77 @@
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
+import {
+    duplicateKeyUserMessage,
+    isDuplicateKeyError,
+    nextAnswerIds,
+    nextTableId,
+    syncQuestionsAnswersSequences,
+} from '../../lib/syncSequences';
 import { ensureAdmin, ensureQuestionManager } from '../utils';
+
+type AnswerRow = {
+    id: number;
+    question_id: number;
+    answer_text: string;
+    is_correct: boolean;
+};
+
+async function persistAnswers(qId: number, rows: Omit<AnswerRow, 'id'>[], retried = false): Promise<void> {
+    await supabaseAdmin.from('answers').delete().eq('question_id', qId);
+
+    const ids = await nextAnswerIds(supabaseAdmin, rows.length);
+    const payload: AnswerRow[] = rows.map((r, i) => ({
+        id: ids[i],
+        question_id: qId,
+        answer_text: r.answer_text,
+        is_correct: r.is_correct,
+    }));
+
+    const { error } = await supabaseAdmin.from('answers').insert(payload);
+    if (!error) {
+        void syncQuestionsAnswersSequences(supabaseAdmin);
+        return;
+    }
+
+    if (isDuplicateKeyError(error) && !retried) {
+        return persistAnswers(qId, rows, true);
+    }
+
+    if (isDuplicateKeyError(error)) {
+        throw new Error(duplicateKeyUserMessage());
+    }
+
+    throw new Error(error.message);
+}
+
+async function insertQuestion(
+    questionData: Record<string, unknown>,
+    retried = false
+): Promise<number> {
+    const newId = await nextTableId(supabaseAdmin, 'questions');
+
+    const { data, error } = await supabaseAdmin
+        .from('questions')
+        .insert([{ ...questionData, id: newId }])
+        .select('id')
+        .single();
+
+    if (!error && data?.id) {
+        void syncQuestionsAnswersSequences(supabaseAdmin);
+        return data.id;
+    }
+
+    if (isDuplicateKeyError(error) && !retried) {
+        return insertQuestion(questionData, true);
+    }
+
+    if (isDuplicateKeyError(error)) {
+        throw new Error(duplicateKeyUserMessage());
+    }
+
+    throw new Error(error?.message ?? 'No se pudo crear la pregunta');
+}
 
 const returnQueryField = z.string().optional().default('');
 
@@ -27,7 +97,6 @@ export const questionsActions = {
 
             const { id, subject_id, level_id, question_text, scope, faculty_id, program_id, min_semester, max_semester, ans_1, ans_2, ans_3, ans_4, correct_idx, return_query } = input;
 
-            // Limpieza de IDs según el Scope para mantener la integridad de la DB
             let final_faculty = null;
             let final_program = null;
 
@@ -57,28 +126,27 @@ export const questionsActions = {
                 faculty_id: final_faculty,
                 program_id: final_program,
                 min_semester: parseInt(min_semester),
-                max_semester: parseInt(max_semester)
+                max_semester: parseInt(max_semester),
             };
+
+            const answerRows = [
+                { question_id: 0, answer_text: ans_1, is_correct: correct_idx === "1" },
+                { question_id: 0, answer_text: ans_2, is_correct: correct_idx === "2" },
+                { question_id: 0, answer_text: ans_3, is_correct: correct_idx === "3" },
+                { question_id: 0, answer_text: ans_4, is_correct: correct_idx === "4" },
+            ];
 
             let qId: number;
             if (id && id !== "") {
-                qId = parseInt(id);
+                qId = parseInt(id, 10);
+                if (isNaN(qId)) throw new Error('ID de pregunta inválido');
                 const { error } = await supabaseAdmin.from('questions').update(questionData).eq('id', qId);
                 if (error) throw new Error(error.message);
             } else {
-                const { data, error } = await supabaseAdmin.from('questions').insert([questionData]).select().single();
-                if (error) throw new Error(error.message);
-                qId = data.id;
+                qId = await insertQuestion(questionData);
             }
 
-            // Sincronizar Respuestas
-            await supabaseAdmin.from('answers').delete().eq('question_id', qId);
-            await supabaseAdmin.from('answers').insert([
-                { question_id: qId, answer_text: ans_1, is_correct: correct_idx === "1" },
-                { question_id: qId, answer_text: ans_2, is_correct: correct_idx === "2" },
-                { question_id: qId, answer_text: ans_3, is_correct: correct_idx === "3" },
-                { question_id: qId, answer_text: ans_4, is_correct: correct_idx === "4" },
-            ]);
+            await persistAnswers(qId, answerRows);
 
             return { success: true, message: "Pregunta guardada exitosamente", return_query };
         }

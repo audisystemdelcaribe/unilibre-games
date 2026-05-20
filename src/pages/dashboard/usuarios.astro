@@ -237,7 +237,8 @@ const result = Astro.getActionResult(actions.createUser)
                 </div>
                 <div class="form-control">
                     <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Contraseña inicial (mín. 6)</span></label>
-                    <input name="password" type="password" required minlength="6" class="input input-bordered w-full rounded-2xl font-bold" placeholder="••••••••" autocomplete="new-password" />
+                    <input name="password" type="password" required minlength="8" class="input input-bordered w-full rounded-2xl font-bold" placeholder="••••••••" autocomplete="new-password" />
+                    <p class="text-[10px] text-slate-500 mt-1">Mín. 8 caracteres: mayúscula, minúscula, número y símbolo (! @ * # …).</p>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div class="form-control">
@@ -377,8 +378,9 @@ const result = Astro.getActionResult(actions.createUser)
             <form method="POST" action={actions.changePassword} class="space-y-6">
                 <input type="hidden" name="player_id" id="password_player_id" />
                 <div class="form-control">
-                    <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Nueva contraseña (mín. 6 caracteres)</span></label>
-                    <input name="new_password" type="password" required minlength="6" class="input input-bordered w-full rounded-2xl font-bold" placeholder="••••••••" autocomplete="new-password" />
+                    <label class="label"><span class="label-text font-black text-slate-700 uppercase text-[10px]">Nueva contraseña (mín. 8)</span></label>
+                    <input name="new_password" type="password" required minlength="8" class="input input-bordered w-full rounded-2xl font-bold" placeholder="••••••••" autocomplete="new-password" />
+                    <p class="text-[10px] text-slate-500">Mayúscula, minúscula, número y símbolo.</p>
                 </div>
 
                 <div class="modal-action flex gap-3 mt-10">

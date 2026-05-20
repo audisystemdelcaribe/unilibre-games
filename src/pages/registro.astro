@@ -68,8 +68,8 @@ if (result?.error) toastInfo = { type: 'error', message: result.error.message };
 
         <div class="form-control">
             <label class="label"><span class="label-text font-bold text-zinc-400 uppercase text-[10px]">Contraseña</span></label>
-            <input name="password" type="password" required minlength="6" class="input input-bordered bg-zinc-800 border-zinc-700" placeholder="Mín. 6 caracteres" />
-            <p class="text-xs text-zinc-500 mt-1" id="password-hint">Mínimo 6 caracteres. Caracteres permitidos: letras (a-z, A-Z), números (0-9) y símbolos (!@#$%^&*()_+-=[]{};':&quot;|&lt;&gt;?,./~)</p>
+            <input name="password" type="password" required minlength="8" class="input input-bordered bg-zinc-800 border-zinc-700" placeholder="Mín. 8 caracteres" />
+            <p class="text-xs text-zinc-500 mt-1" id="password-hint">Mínimo 8 caracteres, con mayúscula, minúscula, número y símbolo (ej. ! * @ #).</p>
         </div>
 
         <div class="pt-4 space-y-4">

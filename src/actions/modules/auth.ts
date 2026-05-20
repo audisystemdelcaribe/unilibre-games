@@ -2,20 +2,10 @@
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
 import { normalizeInstitutionalEmail } from '../../lib/institutionalEmail';
+import { mapSupabasePasswordError } from '../../lib/passwordPolicy';
+import { passwordFieldSchema, PASSWORD_REQUIREMENTS_MSG } from '../../lib/passwordPolicy.zod';
 
-// Mensaje único para requisitos de contraseña (se muestra en validación y en errores de Supabase)
-export const PASSWORD_REQUIREMENTS_MSG =
-    "Caracteres permitidos: letras (a-z, A-Z), números (0-9) y símbolos (!@#$%^&*()_+-=[]{};':\"|<>?,./~). Mínimo 6 caracteres.";
-
-// Solo caracteres que acepta Supabase Auth (evita emojis y caracteres que generan error)
-const PASSWORD_ALLOWED_REGEX = /^[\x20-\x7E]*$/;
-
-const passwordSchema = z
-    .string()
-    .min(6, "La contraseña debe tener al menos 6 caracteres. " + PASSWORD_REQUIREMENTS_MSG)
-    .refine((p) => PASSWORD_ALLOWED_REGEX.test(p), {
-        message: "La contraseña contiene caracteres no permitidos. " + PASSWORD_REQUIREMENTS_MSG,
-    });
+export { PASSWORD_REQUIREMENTS_MSG };
 
 function passwordResetRedirectUrl(context: { url?: URL }): string {
     const origin =
@@ -32,12 +22,7 @@ export const authActions = {
             email: z.string().email().refine(e => e.endsWith('@unilibre.edu.co'), {
                 message: "Debe ser un correo institucional (@unilibre.edu.co)"
             }),
-            password: z
-                .string()
-                .min(6, "La contraseña debe tener al menos 6 caracteres. " + PASSWORD_REQUIREMENTS_MSG)
-                .refine(p => PASSWORD_ALLOWED_REGEX.test(p), {
-                    message: "La contraseña contiene caracteres no permitidos. " + PASSWORD_REQUIREMENTS_MSG
-                }),
+            password: passwordFieldSchema(),
             full_name: z.string().min(3, "Nombre muy corto").max(200, "Nombre muy largo"),
             program_id: z.string().min(1, "Selecciona un programa"),
             semester: z.string().refine(s => {
@@ -78,14 +63,9 @@ export const authActions = {
             });
 
             if (error) {
-                // Traducir errores de contraseña de Supabase a mensaje claro con caracteres permitidos
                 const msg = error.message || "";
-                const isPasswordError =
-                    /password|contraseña|weak|weak password|character|caracter|requirement|requisito/i.test(msg) ||
-                    msg.includes("6 characters") ||
-                    msg.includes("at least");
-                if (isPasswordError) {
-                    throw new Error("La contraseña no cumple los requisitos. " + PASSWORD_REQUIREMENTS_MSG);
+                if (/password|contraseña|weak|character|caracter|requirement|requisito|leaked|pwned/i.test(msg)) {
+                    throw new Error(mapSupabasePasswordError(msg));
                 }
                 throw new Error(error.message);
             }
@@ -129,7 +109,7 @@ export const authActions = {
         accept: "form",
         input: z
             .object({
-                new_password: passwordSchema,
+                new_password: passwordFieldSchema("La nueva contraseña"),
                 confirm_password: z.string(),
             })
             .refine((data) => data.new_password === data.confirm_password, {
@@ -154,12 +134,8 @@ export const authActions = {
 
             if (error) {
                 const msg = error.message || "";
-                const isPasswordError =
-                    /password|contraseña|weak|character|caracter|requirement|requisito/i.test(msg) ||
-                    msg.includes("6 characters") ||
-                    msg.includes("at least");
-                if (isPasswordError) {
-                    throw new Error("La contraseña no cumple los requisitos. " + PASSWORD_REQUIREMENTS_MSG);
+                if (/password|contraseña|weak|character|caracter|requirement|requisito|leaked|pwned/i.test(msg)) {
+                    throw new Error(mapSupabasePasswordError(msg));
                 }
                 throw new Error(error.message);
             }

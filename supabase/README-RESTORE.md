@@ -160,6 +160,12 @@ No hay forma mágica de recuperar preguntas o historial: hay que **reconstruir m
 
 ---
 
+### Error «duplicate key» al crear preguntas
+
+Tras importar un backup con IDs fijos, el contador automático puede desfasarse. **La app ya asigna IDs nuevos sola** al guardar preguntas (no hace falta entrar a Supabase). Si alguien con acceso al SQL Editor quiere alinear el contador del servidor, puede ejecutar `SELECT public.sync_questions_answers_sequences();` (migración `013_sync_questions_answers_sequences.sql`).
+
+---
+
 ### Resumen rápido
 
 | Situación | Qué hacer |

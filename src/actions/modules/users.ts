@@ -2,6 +2,16 @@ import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { ensureAdmin } from '@/actions/utils';
+import { mapSupabasePasswordError } from '../../lib/passwordPolicy';
+import { passwordFieldSchema } from '../../lib/passwordPolicy.zod';
+
+function throwIfAuthPasswordError(error: { message?: string }): void {
+    const msg = error.message || "";
+    if (/password|contraseña|weak|character|caracter|requirement|requisito|leaked|pwned/i.test(msg)) {
+        throw new Error(mapSupabasePasswordError(msg));
+    }
+    throw new Error(msg);
+}
 
 async function getOwnPlayer(context: any) {
     const user = await context.locals.getUser();
@@ -40,7 +50,7 @@ export const usersActions = {
     changeMyPassword: defineAction({
         accept: 'form',
         input: z.object({
-            new_password: z.string().min(6, "La contraseña debe tener al menos 6 caracteres"),
+            new_password: passwordFieldSchema("La nueva contraseña"),
             confirm_password: z.string(),
         }).refine((data) => data.new_password === data.confirm_password, {
             message: "Las contraseñas no coinciden",
@@ -53,7 +63,7 @@ export const usersActions = {
                 password: input.new_password,
             });
 
-            if (error) throw new Error(error.message);
+            if (error) throwIfAuthPasswordError(error);
             return { success: true, message: "Contraseña actualizada correctamente" };
         },
     }),
@@ -102,7 +112,7 @@ export const usersActions = {
         accept: 'form',
         input: z.object({
             player_id: z.string(),
-            new_password: z.string().min(6, "La contraseña debe tener al menos 6 caracteres"),
+            new_password: passwordFieldSchema("La nueva contraseña"),
         }),
         handler: async ({ player_id, new_password }, context) => {
             await ensureAdmin(context);
@@ -121,7 +131,7 @@ export const usersActions = {
                 password: new_password
             });
 
-            if (authError) throw new Error(authError.message);
+            if (authError) throwIfAuthPasswordError(authError);
             return { success: true, message: "Contraseña cambiada correctamente" };
         }
     }),
@@ -158,7 +168,7 @@ export const usersActions = {
             email: z.string().email("Correo inválido").refine((e) => e.endsWith("@unilibre.edu.co"), {
                 message: "Debe ser un correo institucional (@unilibre.edu.co)",
             }),
-            password: z.string().min(6, "La contraseña debe tener al menos 6 caracteres"),
+            password: passwordFieldSchema(),
             name: z.string().min(3, "Nombre debe tener al menos 3 caracteres"),
             program_id: z.string(),
             semester: z.string().refine(
@@ -199,7 +209,7 @@ export const usersActions = {
                 if (/already|registered|exists|duplicate/i.test(authError.message)) {
                     throw new Error("Ya existe un usuario con ese correo");
                 }
-                throw new Error(authError.message);
+                throwIfAuthPasswordError(authError);
             }
 
             const authUserId = authData.user?.id;

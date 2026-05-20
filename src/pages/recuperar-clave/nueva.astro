@@ -1,7 +1,7 @@
 ---
 import "../../styles/global.css";
 import { actions } from "astro:actions";
-import { PASSWORD_REQUIREMENTS_MSG } from "../../actions/modules/auth";
+import { PASSWORD_REQUIREMENTS_MSG } from "../../lib/passwordPolicy";
 
 const result = Astro.getActionResult(actions.completePasswordReset);
 
@@ -74,7 +74,7 @@ const canReset = !!user && !sessionError;
 					name="new_password"
 					type="password"
 					required
-					minlength="6"
+					minlength="8"
 					autocomplete="new-password"
 					class="w-full bg-zinc-800 border-none rounded-xl p-3 focus:ring-2 focus:ring-unilibre-blue outline-none transition-all"
 				/>
@@ -86,7 +86,7 @@ const canReset = !!user && !sessionError;
 					name="confirm_password"
 					type="password"
 					required
-					minlength="6"
+					minlength="8"
 					autocomplete="new-password"
 					class="w-full bg-zinc-800 border-none rounded-xl p-3 focus:ring-2 focus:ring-unilibre-blue outline-none transition-all"
 				/>
