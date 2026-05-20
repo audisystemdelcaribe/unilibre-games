@@ -23,6 +23,17 @@ export function preguntasListPath(queryString: string): string {
     return queryString ? `/dashboard/preguntas?${queryString}` : "/dashboard/preguntas?tab=listado";
 }
 
+/** Añade mensaje flash (toast) a la query de redirección tras una acción. */
+export function preguntasListPathWithFlash(
+    queryString: string,
+    flash: { type: "success" | "error"; message: string }
+): string {
+    const params = new URLSearchParams(queryString || "tab=listado");
+    params.set("flash", flash.message);
+    params.set("flashType", flash.type);
+    return preguntasListPath(params.toString());
+}
+
 export function parsePreguntasListQuery(raw: string | null | undefined): PreguntasListFilters {
     if (!raw?.trim()) return { tab: "listado" };
     const params = new URLSearchParams(raw.trim());

@@ -4,7 +4,7 @@ import { actions } from "astro:actions";
 import { Icon } from 'astro-icon/components';
 import DeleteModal from "../../components/DeleteModal.astro";
 import FormButton from "../../components/FormButton.astro";
-import { buildPreguntasListQuery, preguntasListPath } from "../../lib/preguntasListQuery";
+import { buildPreguntasListQuery, preguntasListPath, preguntasListPathWithFlash } from "../../lib/preguntasListQuery";
 
 const user = await Astro.locals.getUser();
 if (!user) return Astro.redirect("/");
@@ -16,7 +16,7 @@ const isAdmin = profile?.role === 'admin';
 const saveResult = Astro.getActionResult(actions.saveQuestion);
 const deleteResult = Astro.getActionResult(actions.deleteQuestion);
 const bulkDeleteResult = Astro.getActionResult(actions.deleteQuestionsBulk);
-const result = saveResult || deleteResult || bulkDeleteResult;
+const actionResult = saveResult || deleteResult || bulkDeleteResult;
 
 function returnQueryFromReferer(): string | null {
     const ref = Astro.request.headers.get("Referer");
@@ -30,12 +30,29 @@ function returnQueryFromReferer(): string | null {
     }
 }
 
-if (result) {
-    const q =
-        (result.data?.return_query as string | undefined) ??
+// Tras POST de acción: redirigir con filtros + mensaje en URL (el toast no sobrevive al redirect de Astro)
+if (Astro.request.method === "POST" && actionResult) {
+    const returnQ =
+        (actionResult.data?.return_query as string | undefined) ??
         returnQueryFromReferer() ??
         buildPreguntasListQuery({ tab: "listado" });
-    return Astro.redirect(preguntasListPath(q));
+
+    if (actionResult.data?.success) {
+        return Astro.redirect(
+            preguntasListPathWithFlash(returnQ, {
+                type: "success",
+                message: (actionResult.data.message as string) || "Operación exitosa",
+            })
+        );
+    }
+    if (actionResult.error) {
+        return Astro.redirect(
+            preguntasListPathWithFlash(returnQ, {
+                type: "error",
+                message: actionResult.error.message || "Ocurrió un error",
+            })
+        );
+    }
 }
 
 // --- LÓGICA DE FILTROS, BÚSQUEDA Y PAGINACIÓN ---
@@ -164,6 +181,18 @@ if (tab === 'resumen') {
 }
 
 const returnQueryString = buildPreguntasListQuery({ tab, search, fSubject, fLevel, page });
+
+const flashMsg = url.searchParams.get("flash");
+const flashType = url.searchParams.get("flashType");
+let result = actionResult;
+if (!result && flashMsg) {
+    if (flashType === "success") {
+        result = { data: { success: true, message: flashMsg } };
+    } else {
+        result = { error: { message: flashMsg } };
+    }
+}
+
 const listTabHref = preguntasListPath(
     buildPreguntasListQuery({ tab: "listado", search, fSubject, fLevel, page: 1 })
 );
@@ -708,6 +737,31 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
         }
     });
 
+    form?.addEventListener('submit', (e) => {
+        const scope = scopeSelect.value;
+        if (scope === 'faculty' && !facSelect.value) {
+            e.preventDefault();
+            alert('Selecciona una facultad');
+            return;
+        }
+        if (scope === 'program' && !progSelect.value) {
+            e.preventDefault();
+            alert('Selecciona un programa');
+            return;
+        }
+        if (!subSelect.value) {
+            e.preventDefault();
+            alert('Selecciona una asignatura');
+            return;
+        }
+        const min = parseInt((document.getElementById('f_min') as HTMLInputElement).value, 10);
+        const max = parseInt((document.getElementById('f_max') as HTMLInputElement).value, 10);
+        if (!isNaN(min) && !isNaN(max) && min > max) {
+            e.preventDefault();
+            alert('El semestre mínimo no puede ser mayor que el máximo');
+        }
+    });
+
     // --- NUEVA PREGUNTA ---
     document.getElementById('btn-nueva')?.addEventListener('click', () => {
         form.reset();
@@ -859,4 +913,12 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
     });
 
     if (window.unlockButtons) window.unlockButtons();
+
+    // Quitar flash de la URL para no repetir el toast al refrescar
+    const u = new URL(window.location.href);
+    if (u.searchParams.has('flash')) {
+        u.searchParams.delete('flash');
+        u.searchParams.delete('flashType');
+        window.history.replaceState({}, '', u.pathname + (u.search || ''));
+    }
 </script>

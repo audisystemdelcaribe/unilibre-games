@@ -32,14 +32,25 @@ export const questionsActions = {
             let final_program = null;
 
             if (scope === 'faculty') {
-                final_faculty = parseInt(faculty_id!);
+                if (!faculty_id?.trim()) throw new Error('Selecciona una facultad');
+                final_faculty = parseInt(faculty_id, 10);
+                if (isNaN(final_faculty)) throw new Error('Facultad inválida');
             } else if (scope === 'program') {
-                final_program = parseInt(program_id!);
-                final_faculty = faculty_id ? parseInt(faculty_id) : null;
+                if (!program_id?.trim()) throw new Error('Selecciona un programa');
+                final_program = parseInt(program_id, 10);
+                if (isNaN(final_program)) throw new Error('Programa inválido');
+                if (faculty_id?.trim()) {
+                    const f = parseInt(faculty_id, 10);
+                    final_faculty = isNaN(f) ? null : f;
+                }
             }
 
+            if (!subject_id?.trim()) throw new Error('Selecciona una asignatura');
+            const subjectId = parseInt(subject_id, 10);
+            if (isNaN(subjectId)) throw new Error('Asignatura inválida');
+
             const questionData = {
-                subject_id: parseInt(subject_id),
+                subject_id: subjectId,
                 level_id: parseInt(level_id),
                 question_text,
                 scope,
