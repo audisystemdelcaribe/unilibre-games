@@ -12,7 +12,10 @@ if (profile?.role !== 'admin' && profile?.role !== 'docente') return Astro.redir
 
 const isAdmin = profile?.role === 'admin';
 
-const result = Astro.getActionResult(actions.saveQuestion) || Astro.getActionResult(actions.deleteQuestion);
+const result =
+    Astro.getActionResult(actions.saveQuestion) ||
+    Astro.getActionResult(actions.deleteQuestion) ||
+    Astro.getActionResult(actions.deleteQuestionsBulk);
 
 // --- LÓGICA DE FILTROS, BÚSQUEDA Y PAGINACIÓN ---
 const url = new URL(Astro.request.url);
@@ -308,12 +311,30 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
         </div>
     </form>
 
+    {isAdmin && questions && questions.length > 0 && (
+        <div id="bulk-bar" class="hidden mb-4 flex flex-wrap items-center gap-3 bg-red-50 border border-red-200 rounded-2xl px-5 py-3">
+            <span class="text-sm font-bold text-red-900">
+                <span id="bulk-count">0</span> seleccionada(s)
+            </span>
+            <button type="button" id="btn-bulk-delete" class="btn btn-error btn-sm text-white font-bold gap-2">
+                <Icon name="lucide:trash-2" class="w-4 h-4" />
+                Eliminar seleccionadas
+            </button>
+            <button type="button" id="btn-bulk-clear" class="btn btn-ghost btn-sm">Quitar selección</button>
+        </div>
+    )}
+
     <!-- LISTADO DE PREGUNTAS - TABLA -->
     <div class="overflow-x-auto mb-10 bg-white rounded-2xl border border-base-300 shadow-sm">
         {questions && questions.length > 0 ? (
             <table class="table table-zebra">
                 <thead>
                     <tr class="bg-slate-100 text-slate-700">
+                        {isAdmin && (
+                            <th class="w-10">
+                                <input type="checkbox" id="q-select-all" class="checkbox checkbox-sm checkbox-error" title="Seleccionar todas en esta página" />
+                            </th>
+                        )}
                         <th class="font-black text-xs uppercase">Pregunta</th>
                         <th class="font-black text-xs uppercase whitespace-nowrap">Scope</th>
                         <th class="font-black text-xs uppercase">Opciones de respuesta</th>
@@ -327,7 +348,17 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                     {questions.map((q) => {
                         const scopeDetail = scopeDetailName(q);
                         return (
-                        <tr class="align-top hover:bg-base-200/50">
+                        <tr class="align-top hover:bg-base-200/50" data-question-row>
+                            {isAdmin && (
+                                <td>
+                                    <input
+                                        type="checkbox"
+                                        class="checkbox checkbox-sm checkbox-error q-select"
+                                        value={q.id}
+                                        data-text={String(q.question_text).slice(0, 80)}
+                                    />
+                                </td>
+                            )}
                             <td class="max-w-xs">
                                 <p class="font-bold text-slate-800 text-sm leading-snug line-clamp-3">{q.question_text}</p>
                             </td>
@@ -521,6 +552,32 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
     </dialog>
 
     <DeleteModal id="modal_delete" action={actions.deleteQuestion} />
+
+    {isAdmin && (
+        <dialog id="modal_delete_bulk" class="modal modal-bottom sm:modal-middle">
+            <div class="modal-box border border-base-300 bg-base-100">
+                <div class="flex items-center gap-3 text-error mb-4">
+                    <Icon name="lucide:alert-triangle" class="w-8 h-8" />
+                    <h3 class="font-black text-xl italic">¿ELIMINAR PREGUNTAS?</h3>
+                </div>
+                <p class="py-4 text-slate-600" id="modal_delete_bulk-message"></p>
+                <div class="modal-action flex gap-2">
+                    <button type="button" class="btn btn-ghost" onclick="document.getElementById('modal_delete_bulk').close()">
+                        Cancelar
+                    </button>
+                    <form method="POST" action={actions.deleteQuestionsBulk} class="flex-1">
+                        <input type="hidden" name="ids" id="modal_delete_bulk-ids" />
+                        <button type="submit" class="btn btn-error text-white w-full font-bold">
+                            Confirmar eliminación
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <form method="dialog" class="modal-backdrop">
+                <button>close</button>
+            </form>
+        </dialog>
+    )}
 </DashboardLayout>
 
 <script>
@@ -705,6 +762,72 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
             msgEl.append('¿Eliminar pregunta: ', Object.assign(document.createElement('strong'), { textContent: `"${text || ''}"` }), '?');
             (document.getElementById('modal_delete') as any).showModal();
         });
+    });
+
+    // ELIMINACIÓN MASIVA
+    const bulkBar = document.getElementById('bulk-bar');
+    const bulkCount = document.getElementById('bulk-count');
+    const selectAll = document.getElementById('q-select-all') as HTMLInputElement | null;
+    const bulkModal = document.getElementById('modal_delete_bulk') as HTMLDialogElement | null;
+    const bulkIdsInput = document.getElementById('modal_delete_bulk-ids') as HTMLInputElement | null;
+    const bulkMsg = document.getElementById('modal_delete_bulk-message');
+
+    function getSelectedCheckboxes(): HTMLInputElement[] {
+        return [...document.querySelectorAll<HTMLInputElement>('.q-select:checked')];
+    }
+
+    function updateBulkUI() {
+        const selected = getSelectedCheckboxes();
+        const n = selected.length;
+        bulkBar?.classList.toggle('hidden', n === 0);
+        if (bulkCount) bulkCount.textContent = String(n);
+
+        const total = document.querySelectorAll<HTMLInputElement>('.q-select').length;
+        if (selectAll) {
+            selectAll.checked = n > 0 && n === total;
+            selectAll.indeterminate = n > 0 && n < total;
+        }
+    }
+
+    selectAll?.addEventListener('change', () => {
+        const checked = selectAll.checked;
+        document.querySelectorAll<HTMLInputElement>('.q-select').forEach((cb) => {
+            cb.checked = checked;
+        });
+        updateBulkUI();
+    });
+
+    document.querySelectorAll('.q-select').forEach((cb) => {
+        cb.addEventListener('change', updateBulkUI);
+    });
+
+    document.getElementById('btn-bulk-clear')?.addEventListener('click', () => {
+        document.querySelectorAll<HTMLInputElement>('.q-select').forEach((cb) => { cb.checked = false; });
+        if (selectAll) {
+            selectAll.checked = false;
+            selectAll.indeterminate = false;
+        }
+        updateBulkUI();
+    });
+
+    document.getElementById('btn-bulk-delete')?.addEventListener('click', () => {
+        const selected = getSelectedCheckboxes();
+        if (selected.length === 0) return;
+
+        const ids = selected.map((cb) => cb.value).join(',');
+        if (bulkIdsInput) bulkIdsInput.value = ids;
+
+        if (bulkMsg) {
+            bulkMsg.textContent = '';
+            const n = selected.length;
+            bulkMsg.append(
+                `Se eliminarán `,
+                Object.assign(document.createElement('strong'), { textContent: String(n) }),
+                n === 1 ? ' pregunta' : ' preguntas',
+                '. Esta acción no se puede deshacer.'
+            );
+        }
+        bulkModal?.showModal();
     });
 
     if (window.unlockButtons) window.unlockButtons();

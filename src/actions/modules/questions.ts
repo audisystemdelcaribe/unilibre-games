@@ -79,5 +79,40 @@ export const questionsActions = {
             if (error) throw new Error(error.message);
             return { success: true, message: "Pregunta eliminada" };
         }
-    })
+    }),
+
+    deleteQuestionsBulk: defineAction({
+        accept: 'form',
+        input: z.object({
+            ids: z.string().min(1, "Selecciona al menos una pregunta"),
+        }),
+        handler: async ({ ids }, context) => {
+            await ensureAdmin(context);
+
+            const idList = [
+                ...new Set(
+                    ids
+                        .split(',')
+                        .map((s) => parseInt(s.trim(), 10))
+                        .filter((n) => !isNaN(n) && n > 0)
+                ),
+            ];
+
+            if (idList.length === 0) {
+                throw new Error("No hay preguntas válidas para eliminar");
+            }
+            if (idList.length > 200) {
+                throw new Error("Máximo 200 preguntas por operación");
+            }
+
+            const { error } = await supabaseAdmin.from('questions').delete().in('id', idList);
+            if (error) throw new Error(error.message);
+
+            const n = idList.length;
+            return {
+                success: true,
+                message: n === 1 ? "1 pregunta eliminada" : `${n} preguntas eliminadas`,
+            };
+        },
+    }),
 };
