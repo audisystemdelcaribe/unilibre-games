@@ -431,7 +431,7 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
     <!-- LISTADO DE PREGUNTAS - TABLA -->
     <div class="overflow-x-auto mb-10 bg-white rounded-2xl border border-base-300 shadow-sm">
         {questions && questions.length > 0 ? (
-            <table class="table table-zebra">
+            <table class="table table-zebra w-full preguntas-list-table">
                 <thead>
                     <tr class="bg-slate-100 text-slate-700">
                         {isAdmin && (
@@ -439,9 +439,9 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                                 <input type="checkbox" id="q-select-all" class="checkbox checkbox-sm checkbox-error" title="Seleccionar todas en esta página" />
                             </th>
                         )}
-                        <th class="font-black text-xs uppercase">Pregunta</th>
+                        <th class="font-black text-xs uppercase min-w-[10rem]">Pregunta</th>
                         <th class="font-black text-xs uppercase whitespace-nowrap">Scope</th>
-                        <th class="font-black text-xs uppercase">Opciones de respuesta</th>
+                        <th class="font-black text-xs uppercase min-w-[10rem]">Opciones de respuesta</th>
                         <th class="font-black text-xs uppercase whitespace-nowrap">Asignatura</th>
                         <th class="font-black text-xs uppercase whitespace-nowrap">Nivel</th>
                         <th class="font-black text-xs uppercase whitespace-nowrap">Semestre Min–Max</th>
@@ -461,7 +461,7 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                             id={!isNaN(highlightedSavedId) && Number(q.id) === highlightedSavedId ? `pregunta-${highlightedSavedId}` : undefined}
                         >
                             {isAdmin && (
-                                <td>
+                                <td data-label="">
                                     <input
                                         type="checkbox"
                                         class="checkbox checkbox-sm checkbox-error q-select"
@@ -470,10 +470,10 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                                     />
                                 </td>
                             )}
-                            <td class="max-w-xs">
-                                <p class="font-bold text-slate-800 text-sm leading-snug line-clamp-3">{q.question_text}</p>
+                            <td class="min-w-[10rem] max-w-none align-top" data-label="Pregunta">
+                                <p class="font-bold text-slate-800 text-sm leading-relaxed break-words whitespace-normal">{q.question_text}</p>
                             </td>
-                            <td>
+                            <td data-label="Ámbito">
                                 <div class="flex flex-col gap-1 min-w-[7rem]">
                                     <span class:list={[
                                         "badge badge-sm font-bold uppercase text-[10px] w-fit",
@@ -488,26 +488,26 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                                     )}
                                 </div>
                             </td>
-                            <td class="max-w-xs">
-                                <ul class="space-y-1 text-xs">
+                            <td class="min-w-[10rem] max-w-none align-top" data-label="Opciones de respuesta">
+                                <ul class="space-y-1.5 text-xs">
                                     {q.answers?.map((a: any, idx: number) => (
                                         <li class:list={["flex items-start gap-2 py-0.5", a.is_correct ? "text-success font-bold" : "text-slate-500"]}>
-                                            <span class="mt-0.5 flex-shrink-0">{a.is_correct ? '✓' : '○'}</span>
-                                            <span class="line-clamp-2">{a.answer_text}</span>
+                                            <span class="mt-0.5 shrink-0">{a.is_correct ? '✓' : '○'}</span>
+                                            <span class="break-words whitespace-normal leading-relaxed min-w-0">{a.answer_text}</span>
                                         </li>
                                     ))}
                                 </ul>
                             </td>
-                            <td>
-                                <span class="text-sm font-medium text-slate-600">{q.subjects?.name || '—'}</span>
+                            <td class="align-top" data-label="Asignatura">
+                                <span class="text-sm font-medium text-slate-600 break-words whitespace-normal">{q.subjects?.name || '—'}</span>
                             </td>
-                            <td>
-                                <span class="text-sm font-medium text-slate-600">{q.game_levels?.name || '—'}</span>
+                            <td data-label="Nivel">
+                                <span class="text-sm font-medium text-slate-600 break-words whitespace-normal">{q.game_levels?.name || '—'}</span>
                             </td>
-                            <td>
+                            <td data-label="Semestre">
                                 <span class="text-sm font-medium text-slate-600">{q.min_semester} – {q.max_semester}</span>
                             </td>
-                            <td class="text-right">
+                            <td class="text-right" data-label="Acciones">
                                 <div class="flex justify-end gap-1">
                                     <button class="btn btn-ghost btn-sm btn-square text-primary btn-edit"
                                         data-id={q.id}
@@ -541,6 +541,50 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
             </div>
         )}
     </div>
+
+    <style>
+        @media (max-width: 767px) {
+            .preguntas-list-table thead {
+                display: none;
+            }
+            .preguntas-list-table tbody tr {
+                display: block;
+                margin-bottom: 1rem;
+                padding: 1rem;
+                border: 1px solid oklch(var(--b3));
+                border-radius: 1rem;
+                background: oklch(var(--b1));
+            }
+            .preguntas-list-table tbody tr:hover {
+                background: oklch(var(--b2) / 0.5);
+            }
+            .preguntas-list-table tbody td {
+                display: block;
+                width: 100%;
+                max-width: none !important;
+                min-width: 0 !important;
+                border: none;
+                padding: 0.5rem 0;
+                text-align: left !important;
+            }
+            .preguntas-list-table tbody td::before {
+                content: attr(data-label);
+                display: block;
+                font-size: 0.625rem;
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: oklch(var(--bc) / 0.5);
+                margin-bottom: 0.25rem;
+            }
+            .preguntas-list-table tbody td[data-label=""]::before {
+                display: none;
+            }
+            .preguntas-list-table tbody td[data-label="Acciones"] .flex {
+                justify-content: flex-start !important;
+            }
+        }
+    </style>
 
     <!-- PAGINACIÓN DINÁMICA -->
     {totalPages > 1 && (
