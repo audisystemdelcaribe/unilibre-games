@@ -26,12 +26,41 @@ export function preguntasListPath(queryString: string): string {
 /** Añade mensaje flash (toast) a la query de redirección tras una acción. */
 export function preguntasListPathWithFlash(
     queryString: string,
-    flash: { type: "success" | "error"; message: string }
+    flash: { type: "success" | "error"; message: string },
+    extra?: { savedId?: number; filtersCleared?: boolean }
 ): string {
     const params = new URLSearchParams(queryString || "tab=listado");
     params.set("flash", flash.message);
     params.set("flashType", flash.type);
+    if (extra?.savedId) params.set("saved_id", String(extra.savedId));
+    if (extra?.filtersCleared) params.set("filtros", "cleared");
     return preguntasListPath(params.toString());
+}
+
+/** Tras guardar: listado página 1 sin filtros de materia/nivel para que se vea la pregunta nueva. */
+export function preguntasListPathAfterSave(
+    returnQuery: string,
+    flash: { type: "success" | "error"; message: string },
+    savedId: number
+): { path: string; filtersCleared: boolean } {
+    const prev = parsePreguntasListQuery(returnQuery);
+    const filtersCleared = !!(prev.fSubject || prev.fLevel || prev.search);
+
+    const base = buildPreguntasListQuery({
+        tab: "listado",
+        search: "",
+        fSubject: "",
+        fLevel: "",
+        page: 1,
+    });
+
+    return {
+        path: preguntasListPathWithFlash(base, flash, {
+            savedId,
+            filtersCleared,
+        }),
+        filtersCleared,
+    };
 }
 
 export function parsePreguntasListQuery(raw: string | null | undefined): PreguntasListFilters {

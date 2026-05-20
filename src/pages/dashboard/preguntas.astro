@@ -4,7 +4,13 @@ import { actions } from "astro:actions";
 import { Icon } from 'astro-icon/components';
 import DeleteModal from "../../components/DeleteModal.astro";
 import FormButton from "../../components/FormButton.astro";
-import { buildPreguntasListQuery, preguntasListPath, preguntasListPathWithFlash } from "../../lib/preguntasListQuery";
+import { supabaseAdmin } from "../../lib/supabaseAdmin";
+import {
+    buildPreguntasListQuery,
+    preguntasListPath,
+    preguntasListPathAfterSave,
+    preguntasListPathWithFlash,
+} from "../../lib/preguntasListQuery";
 
 const user = await Astro.locals.getUser();
 if (!user) return Astro.redirect("/");
@@ -38,6 +44,14 @@ if (Astro.request.method === "POST" && actionResult) {
         buildPreguntasListQuery({ tab: "listado" });
 
     if (actionResult.data?.success) {
+        const savedId = Number(actionResult.data.saved_id);
+        if (saveResult && !isNaN(savedId) && savedId > 0) {
+            const { path } = preguntasListPathAfterSave(returnQ, {
+                type: "success",
+                message: (actionResult.data.message as string) || "Pregunta guardada",
+            }, savedId);
+            return Astro.redirect(path);
+        }
         return Astro.redirect(
             preguntasListPathWithFlash(returnQ, {
                 type: "success",
@@ -178,9 +192,28 @@ if (tab === 'resumen') {
     questions = qData;
     count = qCount || 0;
     totalPages = Math.ceil(count / pageSize);
+
+    const savedIdParam = parseInt(url.searchParams.get("saved_id") || "", 10);
+    if (!isNaN(savedIdParam) && savedIdParam > 0) {
+        const inList = (questions || []).some((q) => Number(q.id) === savedIdParam);
+        if (!inList) {
+            const { data: savedQ } = await supabaseAdmin
+                .from("questions")
+                .select("*, subjects(name), game_levels(name, money_value), answers(*), programs(name), faculties(name)")
+                .eq("id", savedIdParam)
+                .maybeSingle();
+            if (savedQ) {
+                questions = [savedQ, ...(questions || [])].slice(0, pageSize);
+                count = (count || 0) + 1;
+            }
+        }
+    }
 }
 
 const returnQueryString = buildPreguntasListQuery({ tab, search, fSubject, fLevel, page });
+const filtersWereCleared = url.searchParams.get("filtros") === "cleared";
+const highlightedSavedId = parseInt(url.searchParams.get("saved_id") || "", 10);
+const hasActiveFilters = !!(search || fSubject || fLevel);
 
 const flashMsg = url.searchParams.get("flash");
 const flashType = url.searchParams.get("flashType");
@@ -339,6 +372,24 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
 
     {tab === 'listado' && (
     <>
+    {filtersWereCleared && (
+        <div class="alert alert-info mb-4 shadow-sm">
+            <Icon name="lucide:info" class="w-5 h-5 shrink-0" />
+            <span class="text-sm">
+                Se quitaron los filtros para que veas la pregunta que acabas de guardar
+                {!isNaN(highlightedSavedId) && highlightedSavedId > 0 ? ` (nº ${highlightedSavedId})` : ""}.
+            </span>
+        </div>
+    )}
+    {hasActiveFilters && !filtersWereCleared && (
+        <div class="alert alert-warning mb-4 shadow-sm">
+            <Icon name="lucide:filter" class="w-5 h-5 shrink-0" />
+            <span class="text-sm">
+                Tienes filtros activos. Una pregunta nueva puede no aparecer si no coincide con la búsqueda, materia o nivel.
+                <a href={listTabHref} class="link link-primary font-bold ml-1">Ver listado sin filtros</a>
+            </span>
+        </div>
+    )}
     <!-- BARRA DE FILTROS REALTIME (Vía GET) -->
     <form method="GET" class="grid grid-cols-1 md:grid-cols-12 gap-3 mb-8 bg-white p-4 rounded-3xl border border-base-300 shadow-sm">
         <input type="hidden" name="tab" value="listado" />
@@ -401,7 +452,14 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                     {questions.map((q) => {
                         const scopeDetail = scopeDetailName(q);
                         return (
-                        <tr class="align-top hover:bg-base-200/50" data-question-row>
+                        <tr
+                            class:list={[
+                                "align-top hover:bg-base-200/50",
+                                !isNaN(highlightedSavedId) && Number(q.id) === highlightedSavedId && "bg-emerald-50 ring-2 ring-emerald-400 ring-inset",
+                            ]}
+                            data-question-row
+                            id={!isNaN(highlightedSavedId) && Number(q.id) === highlightedSavedId ? `pregunta-${highlightedSavedId}` : undefined}
+                        >
                             {isAdmin && (
                                 <td>
                                     <input
@@ -921,4 +979,7 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
         u.searchParams.delete('flashType');
         window.history.replaceState({}, '', u.pathname + (u.search || ''));
     }
+
+    const savedRow = document.querySelector('[id^="pregunta-"]');
+    savedRow?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 </script>

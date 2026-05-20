@@ -136,6 +136,8 @@ export const questionsActions = {
                 { question_id: 0, answer_text: ans_4, is_correct: correct_idx === "4" },
             ];
 
+            const textNorm = question_text.trim();
+
             let qId: number;
             if (id && id !== "") {
                 qId = parseInt(id, 10);
@@ -143,12 +145,36 @@ export const questionsActions = {
                 const { error } = await supabaseAdmin.from('questions').update(questionData).eq('id', qId);
                 if (error) throw new Error(error.message);
             } else {
-                qId = await insertQuestion(questionData);
+                const { data: dup } = await supabaseAdmin
+                    .from('questions')
+                    .select('id')
+                    .eq('subject_id', subjectId)
+                    .eq('level_id', questionData.level_id as number)
+                    .eq('question_text', textNorm)
+                    .limit(1)
+                    .maybeSingle();
+
+                if (dup?.id) {
+                    throw new Error(
+                        `Ya existe una pregunta idéntica en esta asignatura y nivel (nº ${dup.id}). ` +
+                            'Busca ese número en el listado (quita filtros si no la ves).'
+                    );
+                }
+
+                qId = await insertQuestion({ ...questionData, question_text: textNorm });
             }
 
             await persistAnswers(qId, answerRows);
 
-            return { success: true, message: "Pregunta guardada exitosamente", return_query };
+            const isNew = !(id && id !== "");
+            return {
+                success: true,
+                message: isNew
+                    ? `Pregunta guardada (nº ${qId}). Aparece al inicio del listado.`
+                    : `Pregunta actualizada (nº ${qId}).`,
+                return_query,
+                saved_id: qId,
+            };
         }
     }),
 
