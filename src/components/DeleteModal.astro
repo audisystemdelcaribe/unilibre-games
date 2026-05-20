@@ -31,6 +31,7 @@ const { id, action, title = "¿ELIMINAR REGISTRO?", message = "Esta acción no s
 
             <form method="POST" action={action} class="flex-1">
                 <input type="hidden" name="id" id={`${id}-input-id`} />
+                <slot name="extra-fields" />
                 <button type="submit" class="btn btn-error text-white w-full font-bold">
                     Confirmar Eliminación
                 </button>

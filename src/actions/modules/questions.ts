@@ -3,6 +3,8 @@ import { z } from 'astro:schema';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { ensureAdmin, ensureQuestionManager } from '../utils';
 
+const returnQueryField = z.string().optional().default('');
+
 export const questionsActions = {
     saveQuestion: defineAction({
         accept: 'form',
@@ -18,11 +20,12 @@ export const questionsActions = {
             max_semester: z.string().default("10"),
             ans_1: z.string(), ans_2: z.string(), ans_3: z.string(), ans_4: z.string(),
             correct_idx: z.string(),
+            return_query: returnQueryField,
         }),
         handler: async (input, context) => {
             await ensureQuestionManager(context);
 
-            const { id, subject_id, level_id, question_text, scope, faculty_id, program_id, min_semester, max_semester, ans_1, ans_2, ans_3, ans_4, correct_idx } = input;
+            const { id, subject_id, level_id, question_text, scope, faculty_id, program_id, min_semester, max_semester, ans_1, ans_2, ans_3, ans_4, correct_idx, return_query } = input;
 
             // Limpieza de IDs según el Scope para mantener la integridad de la DB
             let final_faculty = null;
@@ -66,18 +69,18 @@ export const questionsActions = {
                 { question_id: qId, answer_text: ans_4, is_correct: correct_idx === "4" },
             ]);
 
-            return { success: true, message: "Pregunta guardada exitosamente" };
+            return { success: true, message: "Pregunta guardada exitosamente", return_query };
         }
     }),
 
     deleteQuestion: defineAction({
         accept: 'form',
-        input: z.object({ id: z.string() }),
-        handler: async ({ id }, context) => {
+        input: z.object({ id: z.string(), return_query: returnQueryField }),
+        handler: async ({ id, return_query }, context) => {
             await ensureAdmin(context);
             const { error } = await supabaseAdmin.from('questions').delete().eq('id', parseInt(id));
             if (error) throw new Error(error.message);
-            return { success: true, message: "Pregunta eliminada" };
+            return { success: true, message: "Pregunta eliminada", return_query };
         }
     }),
 
@@ -85,8 +88,9 @@ export const questionsActions = {
         accept: 'form',
         input: z.object({
             ids: z.string().min(1, "Selecciona al menos una pregunta"),
+            return_query: returnQueryField,
         }),
-        handler: async ({ ids }, context) => {
+        handler: async ({ ids, return_query }, context) => {
             await ensureAdmin(context);
 
             const idList = [
@@ -112,6 +116,7 @@ export const questionsActions = {
             return {
                 success: true,
                 message: n === 1 ? "1 pregunta eliminada" : `${n} preguntas eliminadas`,
+                return_query,
             };
         },
     }),

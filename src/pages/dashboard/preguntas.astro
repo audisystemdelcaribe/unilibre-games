@@ -4,6 +4,7 @@ import { actions } from "astro:actions";
 import { Icon } from 'astro-icon/components';
 import DeleteModal from "../../components/DeleteModal.astro";
 import FormButton from "../../components/FormButton.astro";
+import { buildPreguntasListQuery, preguntasListPath } from "../../lib/preguntasListQuery";
 
 const user = await Astro.locals.getUser();
 if (!user) return Astro.redirect("/");
@@ -12,10 +13,30 @@ if (profile?.role !== 'admin' && profile?.role !== 'docente') return Astro.redir
 
 const isAdmin = profile?.role === 'admin';
 
-const result =
-    Astro.getActionResult(actions.saveQuestion) ||
-    Astro.getActionResult(actions.deleteQuestion) ||
-    Astro.getActionResult(actions.deleteQuestionsBulk);
+const saveResult = Astro.getActionResult(actions.saveQuestion);
+const deleteResult = Astro.getActionResult(actions.deleteQuestion);
+const bulkDeleteResult = Astro.getActionResult(actions.deleteQuestionsBulk);
+const result = saveResult || deleteResult || bulkDeleteResult;
+
+function returnQueryFromReferer(): string | null {
+    const ref = Astro.request.headers.get("Referer");
+    if (!ref) return null;
+    try {
+        const u = new URL(ref);
+        if (!u.pathname.includes("/dashboard/preguntas")) return null;
+        return u.search ? u.search.slice(1) : "tab=listado";
+    } catch {
+        return null;
+    }
+}
+
+if (result) {
+    const q =
+        (result.data?.return_query as string | undefined) ??
+        returnQueryFromReferer() ??
+        buildPreguntasListQuery({ tab: "listado" });
+    return Astro.redirect(preguntasListPath(q));
+}
 
 // --- LÓGICA DE FILTROS, BÚSQUEDA Y PAGINACIÓN ---
 const url = new URL(Astro.request.url);
@@ -142,8 +163,11 @@ if (tab === 'resumen') {
     totalPages = Math.ceil(count / pageSize);
 }
 
-const listTabHref = `/dashboard/preguntas?tab=listado${search ? `&search=${encodeURIComponent(search)}` : ''}${fSubject ? `&fSubject=${fSubject}` : ''}${fLevel ? `&fLevel=${fLevel}` : ''}`;
-const resumenTabHref = '/dashboard/preguntas?tab=resumen';
+const returnQueryString = buildPreguntasListQuery({ tab, search, fSubject, fLevel, page });
+const listTabHref = preguntasListPath(
+    buildPreguntasListQuery({ tab: "listado", search, fSubject, fLevel, page: 1 })
+);
+const resumenTabHref = preguntasListPath(buildPreguntasListQuery({ tab: "resumen" }));
 
 function scopeDetailName(q: Record<string, unknown>): string | null {
     const scope = q.scope as string | undefined;
@@ -460,6 +484,7 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
             </div>
 
             <form method="POST" action={actions.saveQuestion} id="form-q" class="p-8 space-y-6">
+                <input type="hidden" name="return_query" value={returnQueryString} />
                 <input type="hidden" name="id" id="f_id" />
 
                 <!-- FILTROS EN CASCADA -->
@@ -551,7 +576,9 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
         </div>
     </dialog>
 
-    <DeleteModal id="modal_delete" action={actions.deleteQuestion} />
+    <DeleteModal id="modal_delete" action={actions.deleteQuestion}>
+        <input type="hidden" name="return_query" value={returnQueryString} slot="extra-fields" />
+    </DeleteModal>
 
     {isAdmin && (
         <dialog id="modal_delete_bulk" class="modal modal-bottom sm:modal-middle">
@@ -566,6 +593,7 @@ function scopeDetailName(q: Record<string, unknown>): string | null {
                         Cancelar
                     </button>
                     <form method="POST" action={actions.deleteQuestionsBulk} class="flex-1">
+                        <input type="hidden" name="return_query" value={returnQueryString} />
                         <input type="hidden" name="ids" id="modal_delete_bulk-ids" />
                         <button type="submit" class="btn btn-error text-white w-full font-bold">
                             Confirmar eliminación
