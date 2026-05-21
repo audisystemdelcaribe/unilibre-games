@@ -1,17 +1,23 @@
 ---
 interface Props {
-    active: "salas" | "historial";
+    active: "salas" | "rondas" | "historial";
 }
 
 const { active } = Astro.props;
 ---
 
-<div class="tabs tabs-boxed bg-base-200/80 p-1 mb-8 w-fit max-w-full">
+<div class="tabs tabs-boxed bg-base-200/80 p-1 mb-8 w-fit max-w-full flex-wrap">
     <a
         href="/dashboard/eventos"
         class:list={["tab font-bold uppercase text-[10px] tracking-wider", active === "salas" && "tab-active"]}
     >
         Salas
+    </a>
+    <a
+        href="/dashboard/eventos/rondas"
+        class:list={["tab font-bold uppercase text-[10px] tracking-wider", active === "rondas" && "tab-active"]}
+    >
+        Rondas por evento
     </a>
     <a
         href="/dashboard/eventos/historial"

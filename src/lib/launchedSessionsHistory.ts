@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { parseClasicoRoundMeta } from "./clasicoRoundContestant";
 import {
     formatFastestTimeMs,
     getProvisionalWinner,
@@ -27,6 +28,8 @@ export type LaunchedSessionRow = {
     status: string;
     sortTime: string | null;
     participants: SessionParticipant[];
+    /** Silla Caliente: concursante en la silla */
+    contestantName: string | null;
 };
 
 type RoundRow = {
@@ -36,6 +39,7 @@ type RoundRow = {
     classroom_group_id: string | null;
     status: string | null;
     question_started_at: string | null;
+    verification_result: unknown;
     events: {
         id: number;
         name: string;
@@ -120,7 +124,7 @@ export async function loadLaunchedSessionsHistory(
     let roundsQ = supabase
         .from("event_rounds")
         .select(
-            "id, event_id, session_pin, classroom_group_id, status, question_started_at, events(id, name, game_mode_id, season_id, seasons(name), game_modes(name))",
+            "id, event_id, session_pin, classroom_group_id, status, question_started_at, verification_result, events(id, name, game_mode_id, season_id, seasons(name), game_modes(name))",
             { count: "exact" }
         )
         .order("id", { ascending: false });
@@ -150,7 +154,10 @@ export async function loadLaunchedSessionsHistory(
                     "player_id, score, total_time_ms, is_finalist, event_id, classroom_group_id, players(id, name)"
                 )
                 .in("event_id", eventIds),
-            supabase.from("active_contestants").select("event_id, player_id").in("event_id", eventIds),
+            supabase
+                .from("active_contestants")
+                .select("event_id, player_id, players(name)")
+                .in("event_id", eventIds),
         ]);
 
     const acByEvent = new Map(
@@ -158,6 +165,36 @@ export async function loadLaunchedSessionsHistory(
             ac.event_id,
             ac.player_id,
         ])
+    );
+
+    const contestantNameByEvent = new Map<number, string>();
+    const contestantPlayerByRoundId = new Map<number, number>();
+    for (const ac of activeContestants || []) {
+        const row = ac as {
+            event_id: number;
+            round_id: number | null;
+            player_id: number;
+            players: { name?: string } | null;
+        };
+        const name = row.players?.name?.trim();
+        if (name) contestantNameByEvent.set(row.event_id, name);
+        if (row.round_id != null) contestantPlayerByRoundId.set(row.round_id, row.player_id);
+    }
+
+    const contestantPlayerIds = new Set<number>();
+    for (const round of roundRows) {
+        if (round.events?.game_mode_id !== 2) continue;
+        const meta = parseClasicoRoundMeta(round.verification_result);
+        if (meta.contestant_player_id) contestantPlayerIds.add(meta.contestant_player_id);
+        const acPid = contestantPlayerByRoundId.get(round.id);
+        if (acPid) contestantPlayerIds.add(acPid);
+    }
+    const { data: contestantPlayers } =
+        contestantPlayerIds.size > 0
+            ? await supabase.from("players").select("id, name").in("id", [...contestantPlayerIds])
+            : { data: [] };
+    const contestantNameByPlayerId = new Map(
+        (contestantPlayers || []).map((p) => [p.id, p.name || "Estudiante"])
     );
 
     const epBySession = new Map<string, typeof eventPlayers>();
@@ -290,6 +327,16 @@ export async function loadLaunchedSessionsHistory(
             status: round.status || "waiting",
             sortTime,
             participants,
+            contestantName: (() => {
+                if (gameModeId !== 2) return null;
+                const meta = parseClasicoRoundMeta(round.verification_result);
+                if (meta.contestant_player_id) {
+                    return contestantNameByPlayerId.get(meta.contestant_player_id) ?? null;
+                }
+                const acPid = contestantPlayerByRoundId.get(round.id);
+                if (acPid) return contestantNameByPlayerId.get(acPid) ?? null;
+                return contestantNameByEvent.get(round.event_id) ?? null;
+            })(),
         };
     });
 

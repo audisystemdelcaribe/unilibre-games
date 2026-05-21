@@ -11,6 +11,13 @@ import {
     type EventScope,
 } from '../../lib/questionScope';
 import { saveGameAnswerIdempotent, markQuestionShown } from '../../lib/gameAnswer';
+import {
+    buildClasicoRoundMeta,
+    mergeClasicoRoundVerification,
+    parseClasicoRoundMeta,
+    resolveContestantPlayerIdForClasicoRound,
+} from '../../lib/clasicoRoundContestant';
+import { setupClasicoWinner } from '../../lib/clasicoTransition';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { ensureStaff, ensureStaffFull } from '../utils';
 
@@ -65,6 +72,101 @@ export const liveSessionsActions = {
             };
         }
     }),
+
+    /** Reabre una ronda en espera: limpia estado de juego y opcionalmente genera un PIN nuevo. */
+    reopenWaitingRound: defineAction({
+        accept: 'form',
+        input: z.object({
+            round_id: z.string(),
+            regenerate_pin: z.preprocess((v) => v === 'true' || v === true, z.boolean()).optional(),
+        }),
+        handler: async ({ round_id, regenerate_pin }, context) => {
+            await ensureStaff(context);
+            const rId = parseInt(round_id, 10);
+            if (!Number.isFinite(rId)) throw new Error('Ronda no v?lida');
+
+            const { data: round } = await supabaseAdmin
+                .from('event_rounds')
+                .select('id, status, session_pin, event_id, verification_result, events(game_mode_id, season_id)')
+                .eq('id', rId)
+                .single();
+
+            if (!round) throw new Error('Ronda no encontrada');
+            if (round.status !== 'waiting') {
+                throw new Error('Solo puedes relanzar rondas que est?n en espera. Usa el panel de control para las dem?s.');
+            }
+
+            const gm = (round.events as { game_mode_id?: number } | null)?.game_mode_id;
+            const user = await context.locals.getUser();
+            const { data: myProfile } = await context.locals.supabase
+                .from('players')
+                .select('role')
+                .eq('auth_user_id', user?.id)
+                .single();
+            if (myProfile?.role === 'preseleccion' && gm !== 1) {
+                throw new Error('Tu rol solo permite Preselecci?n.');
+            }
+
+            const newPin = regenerate_pin
+                ? Math.floor(1000 + Math.random() * 9000).toString()
+                : round.session_pin;
+
+            const { error } = await supabaseAdmin
+                .from('event_rounds')
+                .update({
+                    status: 'waiting',
+                    session_pin: newPin,
+                    current_question_id: null,
+                    question_started_at: null,
+                    round_number: 0,
+                })
+                .eq('id', rId);
+
+            if (error) throw new Error(error.message);
+
+            if (gm === 2) {
+                const seasonId = (round.events as { season_id?: number } | null)?.season_id ?? null;
+                const contestantId = await resolveContestantPlayerIdForClasicoRound(
+                    supabaseAdmin,
+                    {
+                        id: rId,
+                        event_id: round.event_id,
+                        verification_result: round.verification_result,
+                    },
+                    seasonId
+                );
+                if (contestantId) {
+                    await setupClasicoWinner(supabaseAdmin, {
+                        playerId: contestantId,
+                        clasicoEventId: round.event_id,
+                        clasicoRoundId: rId,
+                    });
+                    const meta = parseClasicoRoundMeta(round.verification_result);
+                    if (!meta.contestant_player_id) {
+                        await supabaseAdmin
+                            .from('event_rounds')
+                            .update({
+                                verification_result: buildClasicoRoundMeta(
+                                    contestantId,
+                                    meta.from_mmr_round_id
+                                ),
+                            })
+                            .eq('id', rId);
+                    }
+                }
+            }
+
+            return {
+                success: true,
+                message: regenerate_pin
+                    ? `Sala relanzada. Nuevo PIN: ${newPin}`
+                    : 'Sala en espera lista para continuar.',
+                round_id: rId,
+                pin: newPin,
+            };
+        }
+    }),
+
     startGame: defineAction({
         accept: 'form',
         input: z.object({ round_id: z.string() }),
@@ -147,15 +249,57 @@ export const liveSessionsActions = {
                 if (!isFinalist) throw new Error("Solo los finalistas (ganadores de preselecci?n) pueden participar en Mente m?s R?pida.");
             }
 
-            // 2c. Silla Caliente (Cl?sico=2): solo el ganador puede entrar con el PIN
+            // 2c. Silla Caliente (Cl?sico=2): concursante de esta sesi?n/PIN
             if (gameModeId === 2) {
+                const playerId = Number(player.id);
                 const { data: ac } = await supabaseAdmin
                     .from('active_contestants')
-                    .select('player_id')
+                    .select('player_id, round_id')
                     .eq('event_id', round.event_id)
                     .maybeSingle();
-                if (!ac || ac.player_id !== player.id) {
+
+                const allowedId = await resolveContestantPlayerIdForClasicoRound(
+                    supabaseAdmin,
+                    {
+                        id: round.id,
+                        event_id: round.event_id,
+                        verification_result: round.verification_result,
+                    },
+                    evt?.season_id ?? null
+                );
+
+                const viaMeta = allowedId != null && Number(allowedId) === playerId;
+                const viaActive =
+                    ac != null &&
+                    Number(ac.player_id) === playerId &&
+                    (ac.round_id == null || Number(ac.round_id) === Number(round.id));
+
+                const { data: priorSession } = await supabaseAdmin
+                    .from('game_sessions')
+                    .select('id')
+                    .eq('round_id', round.id)
+                    .eq('player_id', playerId)
+                    .eq('event_id', round.event_id)
+                    .limit(1)
+                    .maybeSingle();
+                const viaPriorSession = !!priorSession;
+
+                if (!viaMeta && !viaActive && !viaPriorSession) {
                     throw new Error("Solo el ganador de Mente m?s R?pida puede ingresar con este PIN. El p?blico debe usar 'Ayudar a participante'.");
+                }
+
+                const restoreId = allowedId ?? (viaActive ? ac!.player_id : null);
+                if (restoreId && !parseClasicoRoundMeta(round.verification_result).contestant_player_id) {
+                    const meta = parseClasicoRoundMeta(round.verification_result);
+                    await supabaseAdmin
+                        .from('event_rounds')
+                        .update({
+                            verification_result: mergeClasicoRoundVerification(
+                                round.verification_result,
+                                buildClasicoRoundMeta(Number(restoreId), meta.from_mmr_round_id)
+                            ),
+                        })
+                        .eq('id', round.id);
                 }
             }
 
@@ -178,7 +322,7 @@ export const liveSessionsActions = {
 
             if (sErr) {
                 const isConflict = /duplicate key|unique|unique_session/i.test(sErr.message);
-                if (gameModeId === 1 && isConflict) {
+                if ((gameModeId === 1 || gameModeId === 2) && isConflict) {
                     const { data: updated, error: upErr } = await supabaseAdmin
                         .from('game_sessions')
                         .update({ finished: false, round_id: round.id, session_type: 'classroom' })
@@ -497,11 +641,24 @@ export const liveSessionsActions = {
                 throw new Error("Esta ronda ya termin?. Abre la ronda de Silla Caliente para continuar.");
             }
 
-            // 1b. Silla Caliente: perfil del concursante (semestre, programa, facultad)
-            let clasicoContestant: Awaited<ReturnType<typeof import('../../lib/clasicoQuestionFilters').loadClasicoContestant>> = null;
+            // 1b. Silla Caliente: perfil del concursante de esta ronda (semestre, programa, facultad)
+            let clasicoContestant: Awaited<
+                ReturnType<typeof import('../../lib/clasicoQuestionFilters').loadContestantByPlayerId>
+            > | null = null;
             if (gameModeId === 2) {
-                const { loadClasicoContestant } = await import('../../lib/clasicoQuestionFilters');
-                clasicoContestant = await loadClasicoContestant(supabaseAdmin, round.event_id);
+                const contestantPlayerId = await resolveContestantPlayerIdForClasicoRound(
+                    supabaseAdmin,
+                    {
+                        id: round.id,
+                        event_id: round.event_id,
+                        verification_result: round.verification_result,
+                    },
+                    (round.events as { season_id?: number })?.season_id ?? null
+                );
+                if (contestantPlayerId) {
+                    const { loadContestantByPlayerId } = await import('../../lib/clasicoQuestionFilters');
+                    clasicoContestant = await loadContestantByPlayerId(supabaseAdmin, contestantPlayerId);
+                }
             }
 
             // 2. Preguntas ya usadas: round_questions_shown (o fallback a game_answers)
@@ -541,6 +698,12 @@ export const liveSessionsActions = {
                 .eq('level_id', firstLevelId)
                 .eq('active', true);
 
+            if (gameModeId === 2 && !clasicoContestant) {
+                throw new Error(
+                    "No hay concursante activo en Silla Caliente. Confirma al ganador de Mente m?s R?pida antes de iniciar."
+                );
+            }
+
             let availableIds: number[];
             if (gameModeId === 2 && clasicoContestant) {
                 const { fetchClasicoQuestionIds } = await import('../../lib/clasicoQuestionFilters');
@@ -560,17 +723,26 @@ export const liveSessionsActions = {
                         : gameModeId === 1 && evtScope?.scope === 'faculty'
                           ? ' para esta facultad'
                           : '';
-                const semHint = playerSemester != null ? ` (semestre ${playerSemester} o compatible)` : '';
-                throw new Error(`?Se agotaron las preguntas de este nivel${scopeHint} para esta sesi?n${semHint}! Puedes finalizar el juego o agregar m?s preguntas de Nivel 1.`);
+                const semHint =
+                    gameModeId === 2 && clasicoContestant?.semester != null
+                        ? ` (semestre ${clasicoContestant.semester})`
+                        : '';
+                const progHint =
+                    gameModeId === 2 && clasicoContestant?.program_id != null
+                        ? ` Verifica preguntas activas de Nivel 1 con ?mbito global, del programa del concursante o de su facultad.`
+                        : gameModeId === 2
+                          ? ' Verifica preguntas activas de Nivel 1 (?mbito global o del programa/facultad del concursante).'
+                          : '';
+                throw new Error(
+                    `Se agotaron las preguntas de este nivel${scopeHint} para esta sesi?n${semHint}.${progHint} Puedes finalizar el juego o agregar m?s preguntas de Nivel 1.`
+                );
             }
 
             // 4. Azar y actualizaci?n (solo de las no usadas)
             const chosenId = availableIds[Math.floor(Math.random() * availableIds.length)];
-            const randomQ = scoped.find((q) => q.id === chosenId);
+            if (!chosenId) throw new Error("Error al seleccionar pregunta");
 
-            if (!randomQ) throw new Error("Error al seleccionar pregunta");
-
-            await markQuestionShown(round.id, randomQ.id);
+            await markQuestionShown(round.id, chosenId);
 
             // Actualizar stage a 'playing' cuando inicia el juego (desde waiting)
             await supabaseAdmin.from('event_players').update({ stage: 'playing' })
@@ -578,7 +750,7 @@ export const liveSessionsActions = {
                 .eq('classroom_group_id', round.classroom_group_id);
 
             await supabaseAdmin.from('event_rounds').update({
-                current_question_id: randomQ.id,
+                current_question_id: chosenId,
                 question_started_at: new Date().toISOString(),
                 status: 'active'
             }).eq('id', round.id);
@@ -612,9 +784,14 @@ export const liveSessionsActions = {
             const correct = answer.is_correct === true;
             const { data: correctAns } = await supabaseAdmin.from('answers').select('id').eq('question_id', round.current_question_id).eq('is_correct', true).limit(1).maybeSingle();
             const correctAnswerId = correctAns?.id ?? sel.answer_id;
-            const verificationResult = { question_id: round.current_question_id, is_correct: correct, correct_answer_id: correctAnswerId, student_answer_id: sel.answer_id } as const;
             const { data: roundFull } = await supabaseAdmin.from('event_rounds').select('*, events(scope, program_id, faculty_id, season_id, game_mode_id)').eq('id', rId).single();
             if (!roundFull) throw new Error("Ronda no encontrada");
+            const verificationResult = mergeClasicoRoundVerification(roundFull.verification_result, {
+                question_id: round.current_question_id,
+                is_correct: correct,
+                correct_answer_id: correctAnswerId,
+                student_answer_id: sel.answer_id,
+            });
             const gm = (roundFull.events as { game_mode_id?: number })?.game_mode_id;
             const isPreseleccion = gm === 1;
             const { data: vp } = await context.locals.supabase.from('players').select('role').eq('auth_user_id', (await context.locals.getUser())?.id).single();

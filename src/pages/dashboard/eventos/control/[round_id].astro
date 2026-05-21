@@ -5,6 +5,7 @@ import { actions } from "astro:actions";
 import FormButton from "@/components/FormButton.astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { loadClasicoCurrentQuestion, type ClasicoAnswerOption } from "@/lib/clasicoQuestionView";
+import { resolveContestantPlayerIdForClasicoRound } from "@/lib/clasicoRoundContestant";
 import { loadFastestFingerAttempts } from "@/lib/fastestFingerResults";
 import { seededShuffle } from "@/lib/utils";
 
@@ -188,12 +189,20 @@ const isWaiting = round?.status === 'waiting';
 const isActive = round?.status === 'active';
 const isFinished = round?.status === 'finished';
 
-// Participante en Silla Caliente (para mostrar nombre)
+// Concursante de esta sesión de Silla Caliente (misma lógica que el listado de rondas)
 let clasicoParticipantName = '';
-if (isClasico && (isActive || isWaiting)) {
-    const { data: ac } = await supabaseAdmin.from('active_contestants').select('player_id').eq('event_id', round.event_id).maybeSingle();
-    if (ac?.player_id) {
-        const { data: pl } = await supabaseAdmin.from('players').select('name').eq('id', ac.player_id).single();
+if (isClasico && round) {
+    const contestantId = await resolveContestantPlayerIdForClasicoRound(
+        supabaseAdmin,
+        {
+            id: roundIdNum,
+            event_id: round.event_id,
+            verification_result: round.verification_result,
+        },
+        round.events?.season_id ?? null
+    );
+    if (contestantId) {
+        const { data: pl } = await supabaseAdmin.from('players').select('name').eq('id', contestantId).single();
         clasicoParticipantName = pl?.name || 'Participante';
     }
 }
@@ -358,10 +367,23 @@ if (confirmResult?.data?.clasico_round_id) {
                                         {isClasico && (
                                             <>
                                                 <p class="text-amber-400 text-sm font-bold mt-4">Modo Silla Caliente - Clásico</p>
+                                                {clasicoParticipantName && (
+                                                    <p class="text-white text-xl sm:text-2xl font-black mt-4">
+                                                        Concursante: <span class="text-amber-300">{clasicoParticipantName}</span>
+                                                    </p>
+                                                )}
                                                 <div class="mt-6 p-4 bg-amber-500/20 border border-amber-500/50 rounded-2xl text-left max-w-md mx-auto">
-                                                    <p class="text-amber-400 font-black text-xs uppercase mb-1">Código de acceso para el ganador</p>
+                                                    {clasicoParticipantName ? (
+                                                        <>
+                                                            <p class="text-amber-400 font-black text-xs uppercase mb-1">Debe ingresar con este PIN</p>
+                                                            <p class="text-2xl font-black text-white mb-3">{clasicoParticipantName}</p>
+                                                        </>
+                                                    ) : (
+                                                        <p class="text-zinc-400 text-sm italic mb-3">Concursante aún no asignado (confirma ganador en Mente más Rápida).</p>
+                                                    )}
+                                                    <p class="text-amber-400 font-black text-xs uppercase mb-1">Código de acceso</p>
                                                     <p class="text-2xl font-mono font-black text-white tracking-widest">{round.session_pin}</p>
-                                                    <p class="text-zinc-500 text-xs mt-2">Solo el ganador puede usar este PIN en /play. Si el estudiante se desconecta, que vuelva a entrar con este código.</p>
+                                                    <p class="text-zinc-500 text-xs mt-2">Solo esta persona puede usar el PIN en /play. Si se desconecta, que vuelva a entrar con el mismo código.</p>
                                                 </div>
                                             </>
                                         )}
@@ -463,9 +485,12 @@ if (confirmResult?.data?.clasico_round_id) {
                                             <p class="text-amber-400 font-bold text-lg mb-2">Participante: {clasicoParticipantName}</p>
                                         )}
                                         {isClasico && (
-                                            <div class="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl inline-block">
-                                                <p class="text-amber-400 text-[10px] font-black uppercase">PIN para el ganador (si se desconecta)</p>
-                                                <p class="text-xl font-mono font-black text-white tracking-widest">{round?.session_pin || '—'}</p>
+                                            <div class="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl inline-block text-left">
+                                                <p class="text-amber-400 text-[10px] font-black uppercase">PIN del concursante (si se desconecta)</p>
+                                                {clasicoParticipantName && (
+                                                    <p class="text-lg font-black text-white mt-1">{clasicoParticipantName}</p>
+                                                )}
+                                                <p class="text-xl font-mono font-black text-white tracking-widest mt-1">{round?.session_pin || '—'}</p>
                                             </div>
                                         )}
                                         <h1 class:list={["font-bold italic", isClasico ? "text-4xl md:text-5xl lg:text-6xl" : "text-3xl"]} id="question-text">{qText}</h1>

@@ -2,6 +2,8 @@
 import DashboardLayout from "@/layouts/DashboardLayout.astro";
 import EventosTabs from "@/components/EventosTabs.astro";
 import { Icon } from "astro-icon/components";
+import { actions } from "astro:actions";
+import FormButton from "@/components/FormButton.astro";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getGameModeBadgeClass } from "@/lib/utils";
 import {
@@ -9,6 +11,11 @@ import {
     loadLaunchedSessionsHistory,
     statusLabel,
 } from "@/lib/launchedSessionsHistory";
+
+const reopenResult = Astro.getActionResult(actions.reopenWaitingRound);
+if (reopenResult?.data?.success && reopenResult.data.round_id) {
+    return Astro.redirect(`/dashboard/eventos/control/${reopenResult.data.round_id}`);
+}
 
 const user = await Astro.locals.getUser();
 if (!user) return Astro.redirect("/");
@@ -75,7 +82,7 @@ const statusBadge: Record<string, string> = {
 };
 ---
 
-<DashboardLayout title="Historial de sesiones">
+<DashboardLayout title="Historial de sesiones" actionResult={reopenResult}>
     <EventosTabs active="historial" />
 
     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -155,6 +162,14 @@ const statusBadge: Record<string, string> = {
                                 <span class="text-xs text-slate-500 font-mono">
                                     Salón: {session.classroomGroupId}
                                 </span>
+                                {session.gameModeId === 2 && (
+                                    <span class="badge badge-warning badge-sm font-bold text-[9px] gap-1">
+                                        <Icon name="lucide:flame" class="w-3 h-3" />
+                                        {session.contestantName
+                                            ? `Silla: ${session.contestantName}`
+                                            : "Sin concursante"}
+                                    </span>
+                                )}
                             </div>
                             <div class="flex flex-wrap items-center gap-4 text-sm text-slate-600 shrink-0">
                                 <span class="font-mono font-bold">PIN {session.sessionPin}</span>
@@ -171,14 +186,39 @@ const statusBadge: Record<string, string> = {
                                     {session.participants.length} participante
                                     {session.participants.length === 1 ? "" : "s"}
                                 </span>
-                                <a
-                                    href={`/dashboard/eventos/control/${session.roundId}`}
-                                    class="btn btn-ghost btn-xs gap-1"
-                                    onclick="event.stopPropagation()"
-                                >
-                                    <Icon name="lucide:external-link" size={14} />
-                                    Panel
-                                </a>
+                                {session.status === "waiting" ? (
+                                    <div class="flex flex-wrap gap-1" onclick="event.stopPropagation()">
+                                        <form
+                                            method="POST"
+                                            action={actions.reopenWaitingRound}
+                                            class="inline"
+                                            onsubmit="return confirm('¿Relanzar esta sala? Se generará un PIN nuevo.');"
+                                        >
+                                            <input type="hidden" name="round_id" value={session.roundId} />
+                                            <input type="hidden" name="regenerate_pin" value="true" />
+                                            <FormButton class="btn btn-primary btn-xs text-white font-bold uppercase text-[9px] gap-1">
+                                                <Icon name="lucide:rocket" size={14} />
+                                                Relanzar
+                                            </FormButton>
+                                        </form>
+                                        <form method="POST" action={actions.reopenWaitingRound} class="inline">
+                                            <input type="hidden" name="round_id" value={session.roundId} />
+                                            <input type="hidden" name="regenerate_pin" value="false" />
+                                            <FormButton class="btn btn-ghost btn-xs font-bold uppercase text-[9px] gap-1">
+                                                Continuar
+                                            </FormButton>
+                                        </form>
+                                    </div>
+                                ) : (
+                                    <a
+                                        href={`/dashboard/eventos/control/${session.roundId}`}
+                                        class="btn btn-ghost btn-xs gap-1"
+                                        onclick="event.stopPropagation()"
+                                    >
+                                        <Icon name="lucide:external-link" size={14} />
+                                        Panel
+                                    </a>
+                                )}
                             </div>
                         </div>
                     </summary>

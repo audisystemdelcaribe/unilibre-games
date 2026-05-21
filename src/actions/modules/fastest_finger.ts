@@ -1,6 +1,12 @@
 // src/actions/modules/fastest_finger.ts
 import { defineAction } from 'astro:actions';
 import { z } from 'astro:schema';
+import { buildClasicoRoundMeta } from '../../lib/clasicoRoundContestant';
+import {
+    findClasicoEventForScope,
+    resolveRoundEvent,
+    setupClasicoWinner,
+} from '../../lib/clasicoTransition';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { ensureAdmin, ensureStaffFull } from '../utils';
 
@@ -208,26 +214,10 @@ export const fastestFingerActions = {
                 .single();
             if (!round) throw new Error("Ronda no encontrada");
 
-            const evt = round.events as { season_id?: number; program_id?: number | null; faculty_id?: number | null; scope?: string };
-            const seasonId = evt?.season_id;
-            if (!seasonId) throw new Error("No se pudo obtener la temporada del evento");
+            const evt = resolveRoundEvent(round.events);
+            if (!evt?.season_id) throw new Error("No se pudo obtener la temporada del evento");
 
-            // Buscar evento Clásico (Silla Caliente): misma temporada, mismo programa/facultad según scope
-            let clasicoQuery = supabaseAdmin
-                .from('events')
-                .select('id')
-                .eq('season_id', seasonId)
-                .eq('game_mode_id', 2); // Clásico = Silla Caliente
-
-            if (evt?.scope === 'program' && evt?.program_id) {
-                clasicoQuery = clasicoQuery.eq('program_id', evt.program_id).eq('scope', 'program');
-            } else if (evt?.scope === 'faculty' && evt?.faculty_id) {
-                clasicoQuery = clasicoQuery.eq('faculty_id', evt.faculty_id).eq('scope', 'faculty');
-            } else {
-                clasicoQuery = clasicoQuery.eq('scope', evt?.scope || 'global');
-            }
-
-            const { data: clasicoEvent } = await clasicoQuery.limit(1).maybeSingle();
+            const clasicoEvent = await findClasicoEventForScope(supabaseAdmin, evt);
 
             if (!clasicoEvent) {
                 const scopeHint = evt?.scope === 'program' ? ' y mismo programa' : evt?.scope === 'faculty' ? ' y misma facultad' : '';
@@ -244,31 +234,19 @@ export const fastestFingerActions = {
                     type: 'classroom_quiz',
                     status: 'waiting',
                     classroom_group_id: 'Silla Caliente',
-                    session_pin
+                    session_pin,
+                    verification_result: buildClasicoRoundMeta(pId, rId),
                 }])
                 .select()
                 .single();
 
             if (roundErr) throw new Error(roundErr.message);
 
-            // Inscribir ganador en el evento Clásico
-            await supabaseAdmin
-                .from('event_players')
-                .upsert({
-                    event_id: clasicoEvent.id,
-                    player_id: pId,
-                    classroom_group_id: 'Silla Caliente',
-                    stage: 'lobby'
-                }, { onConflict: 'event_id, player_id' });
-
-            // Marcar como concursante activo en Silla Caliente
-            const { error: acErr } = await supabaseAdmin.from('active_contestants').upsert({
-                event_id: clasicoEvent.id,
-                player_id: pId,
-                round_id: clasicoRound.id
-            }, { onConflict: 'event_id' });
-
-            if (acErr) throw new Error(acErr.message);
+            await setupClasicoWinner(supabaseAdmin, {
+                playerId: pId,
+                clasicoEventId: clasicoEvent.id,
+                clasicoRoundId: clasicoRound.id,
+            });
 
             // Finalizar ronda de Mente más Rápida
             await supabaseAdmin.from('event_rounds').update({ status: 'finished' }).eq('id', rId);

@@ -108,6 +108,13 @@ const { data: programs } = await Astro.locals.supabase.from('programs').select('
                                 </button>
                                 </>
                                 )}
+                                <a
+                                    href={`/dashboard/eventos/rondas?event_id=${e.id}`}
+                                    class="btn btn-ghost btn-sm font-bold uppercase text-[10px] px-3"
+                                    title="Ver rondas de este evento"
+                                >
+                                    Rondas
+                                </a>
                                 <a href={`/dashboard/eventos/${e.id}/lanzar`} class="btn btn-primary btn-sm text-white font-bold uppercase text-[10px] px-4">
                                     Lanzar
                                 </a>

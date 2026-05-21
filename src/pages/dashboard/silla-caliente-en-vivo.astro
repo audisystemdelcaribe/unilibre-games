@@ -1,6 +1,7 @@
 ---
 import DashboardLayout from "@/layouts/DashboardLayout.astro";
 import { Icon } from "astro-icon/components";
+import { resolveContestantPlayerIdForClasicoRound } from "@/lib/clasicoRoundContestant";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { loadClasicoCurrentQuestion } from "@/lib/clasicoQuestionView";
 
@@ -19,7 +20,7 @@ if (profile?.role !== "admin" && profile?.role !== "docente") {
 
 const { data: activeRounds } = await supabaseAdmin
     .from("event_rounds")
-    .select("id, event_id, session_pin, classroom_group_id, status, current_question_id, events(id, name, game_mode_id)")
+    .select("id, event_id, session_pin, classroom_group_id, status, current_question_id, verification_result, events(id, name, game_mode_id, season_id)")
     .in("status", ["waiting", "active"])
     .order("id", { ascending: false });
 
@@ -36,20 +37,18 @@ type LiveSession = {
 const liveSessions: LiveSession[] = [];
 
 for (const r of activeRounds || []) {
-    const evt = r.events as { id?: number; name?: string; game_mode_id?: number } | null;
+    const evt = r.events as { id?: number; name?: string; game_mode_id?: number; season_id?: number } | null;
     if (evt?.game_mode_id !== 2) continue;
 
     let participantName: string | null = null;
-    if (evt?.id) {
-        const { data: ac } = await supabaseAdmin
-            .from("active_contestants")
-            .select("player_id")
-            .eq("event_id", evt.id)
-            .maybeSingle();
-        if (ac?.player_id) {
-            const { data: pl } = await supabaseAdmin.from("players").select("name").eq("id", ac.player_id).single();
-            participantName = pl?.name ?? null;
-        }
+    const contestantId = await resolveContestantPlayerIdForClasicoRound(
+        supabaseAdmin,
+        { id: r.id, event_id: r.event_id, verification_result: r.verification_result },
+        evt?.season_id ?? null
+    );
+    if (contestantId) {
+        const { data: pl } = await supabaseAdmin.from("players").select("name").eq("id", contestantId).single();
+        participantName = pl?.name ?? null;
     }
 
     let question = null;
@@ -92,11 +91,15 @@ for (const r of activeRounds || []) {
                         <div>
                             <h2 class="text-xl font-black uppercase text-slate-800">{s.eventName}</h2>
                             <p class="text-sm text-slate-500 mt-1">
-                                PIN <span class="font-mono font-bold">{s.pin}</span>
-                                · Salón {s.group}
-                                {s.participantName && (
-                                    <> · Concursante: <strong>{s.participantName}</strong></>
+                                Salón {s.group}
+                                {s.participantName ? (
+                                    <> · Concursante: <strong class="text-slate-800">{s.participantName}</strong></>
+                                ) : (
+                                    <> · <span class="italic">Sin concursante asignado</span></>
                                 )}
+                            </p>
+                            <p class="text-sm mt-2">
+                                PIN concursante: <span class="font-mono font-black text-lg text-amber-700 tracking-widest">{s.pin}</span>
                             </p>
                         </div>
                         <div class="flex items-center gap-3 shrink-0">

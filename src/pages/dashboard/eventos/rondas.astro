@@ -1,0 +1,396 @@
+---
+import DashboardLayout from "@/layouts/DashboardLayout.astro";
+import EventosTabs from "@/components/EventosTabs.astro";
+import { Icon } from "astro-icon/components";
+import { actions } from "astro:actions";
+import FormButton from "@/components/FormButton.astro";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { getGameModeBadgeClass } from "@/lib/utils";
+import {
+    loadRoundsGroupedByEvent,
+    scopeLabel,
+    statusLabel,
+} from "@/lib/eventRoundsByEvent";
+
+const reopenResult = Astro.getActionResult(actions.reopenWaitingRound);
+if (reopenResult?.data?.success && reopenResult.data.round_id) {
+    return Astro.redirect(`/dashboard/eventos/control/${reopenResult.data.round_id}`);
+}
+
+const user = await Astro.locals.getUser();
+if (!user) return Astro.redirect("/");
+const { data: profile } = await Astro.locals.supabase
+    .from("players")
+    .select("role")
+    .eq("auth_user_id", user.id)
+    .single();
+if (profile?.role !== "admin" && profile?.role !== "docente" && profile?.role !== "preseleccion") {
+    return Astro.redirect("/dashboard");
+}
+
+const isPreseleccion = profile?.role === "preseleccion";
+const PAGE_SIZE = 10;
+const page = Math.max(1, parseInt(Astro.url.searchParams.get("page") || "1") || 1);
+const seasonId = Astro.url.searchParams.get("season_id")
+    ? parseInt(Astro.url.searchParams.get("season_id")!)
+    : null;
+const gameModeId = Astro.url.searchParams.get("game_mode_id")
+    ? parseInt(Astro.url.searchParams.get("game_mode_id")!)
+    : null;
+const filterEventId = Astro.url.searchParams.get("event_id")
+    ? parseInt(Astro.url.searchParams.get("event_id")!)
+    : null;
+
+const { data: seasons } = await Astro.locals.supabase
+    .from("seasons")
+    .select("id, name")
+    .order("year", { ascending: false })
+    .order("semester", { ascending: false });
+
+const { data: modes } = await Astro.locals.supabase.from("game_modes").select("id, name");
+
+let eventsForFilterQuery = Astro.locals.supabase
+    .from("events")
+    .select("id, name")
+    .order("name", { ascending: true });
+if (isPreseleccion) eventsForFilterQuery = eventsForFilterQuery.eq("game_mode_id", 1);
+const { data: allEvents } = await eventsForFilterQuery;
+
+const { events, totalCount } = await loadRoundsGroupedByEvent(supabaseAdmin, {
+    page,
+    pageSize: PAGE_SIZE,
+    seasonId,
+    gameModeId: isPreseleccion ? 1 : gameModeId,
+    preseleccionOnly: isPreseleccion,
+    eventId: filterEventId,
+});
+
+const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+const hasPrev = page > 1;
+const hasNext = page < totalPages;
+
+function buildUrl(p: number) {
+    const params = new URLSearchParams();
+    if (p > 1) params.set("page", String(p));
+    if (seasonId) params.set("season_id", String(seasonId));
+    if (gameModeId && !isPreseleccion) params.set("game_mode_id", String(gameModeId));
+    if (filterEventId) params.set("event_id", String(filterEventId));
+    const q = params.toString();
+    return `/dashboard/eventos/rondas${q ? `?${q}` : ""}`;
+}
+
+const pageNumbers: number[] = [];
+const show = Math.min(5, totalPages);
+if (totalPages <= 5) for (let i = 1; i <= totalPages; i++) pageNumbers.push(i);
+else if (page <= 3) for (let i = 1; i <= show; i++) pageNumbers.push(i);
+else if (page >= totalPages - 2) for (let i = totalPages - 4; i <= totalPages; i++) pageNumbers.push(i);
+else for (let i = page - 2; i <= page + 2; i++) pageNumbers.push(i);
+
+const statusBadge: Record<string, string> = {
+    waiting: "badge-ghost",
+    active: "badge-primary",
+    fastest_finger: "badge-warning",
+    finished: "badge-neutral",
+};
+---
+
+<DashboardLayout title="Rondas por evento" actionResult={reopenResult}>
+    <EventosTabs active="rondas" />
+
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+        <div>
+            <h2 class="text-4xl font-black italic tracking-tighter uppercase text-slate-800">
+                Rondas por evento
+            </h2>
+            <p class="text-slate-500 font-medium font-mono text-xs">
+                TODAS LAS SESIONES LANZADAS · AGRUPADAS POR SALA
+            </p>
+        </div>
+        <a href="/dashboard/eventos/historial" class="btn btn-ghost btn-sm gap-2 font-bold text-[10px] uppercase">
+            <Icon name="lucide:list-ordered" class="w-4 h-4" />
+            Ver cronológico
+        </a>
+    </div>
+
+    <form method="get" class="flex flex-wrap gap-3 mb-8 items-end">
+        <div class="form-control">
+            <label class="label py-0">
+                <span class="label-text font-black text-[10px] uppercase text-slate-400">Evento</span>
+            </label>
+            <select name="event_id" class="select select-bordered select-sm font-bold min-w-[220px]">
+                <option value="">Todos los eventos</option>
+                {allEvents?.map((e) => (
+                    <option value={e.id} selected={filterEventId === e.id}>
+                        {e.name}
+                    </option>
+                ))}
+            </select>
+        </div>
+        <div class="form-control">
+            <label class="label py-0">
+                <span class="label-text font-black text-[10px] uppercase text-slate-400">Temporada</span>
+            </label>
+            <select name="season_id" class="select select-bordered select-sm font-bold min-w-[180px]">
+                <option value="">Todas</option>
+                {seasons?.map((s) => (
+                    <option value={s.id} selected={seasonId === s.id}>
+                        {s.name}
+                    </option>
+                ))}
+            </select>
+        </div>
+        {!isPreseleccion && (
+            <div class="form-control">
+                <label class="label py-0">
+                    <span class="label-text font-black text-[10px] uppercase text-slate-400">Modo</span>
+                </label>
+                <select name="game_mode_id" class="select select-bordered select-sm font-bold min-w-[160px]">
+                    <option value="">Todos</option>
+                    {modes?.map((m) => (
+                        <option value={m.id} selected={gameModeId === m.id}>
+                            {m.name}
+                        </option>
+                    ))}
+                </select>
+            </div>
+        )}
+        <button type="submit" class="btn btn-primary btn-sm text-white font-bold uppercase text-[10px]">
+            Filtrar
+        </button>
+        {(seasonId || gameModeId || filterEventId) && (
+            <a href="/dashboard/eventos/rondas" class="btn btn-ghost btn-sm">Limpiar</a>
+        )}
+    </form>
+
+    {events.length === 0 ? (
+        <div class="alert bg-base-200 border border-base-300">
+            <Icon name="lucide:info" class="w-5 h-5 shrink-0" />
+            <span>No hay eventos con los filtros seleccionados.</span>
+        </div>
+    ) : (
+        <div class="space-y-6">
+            {events.map((ev) => {
+                const clasicoContestant =
+                    ev.gameModeId === 2
+                        ? ev.rounds.find((r) => r.contestantName)?.contestantName ?? null
+                        : null;
+                return (
+                <details
+                    class="group bg-white border border-base-300 rounded-2xl shadow-sm overflow-hidden"
+                    open={filterEventId === ev.eventId || events.length === 1}
+                >
+                    <summary class="cursor-pointer list-none p-5 hover:bg-base-100/80 transition-colors">
+                        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                            <div class="flex flex-wrap items-center gap-2 min-w-0">
+                                <span class={getGameModeBadgeClass(ev.gameModeId)}>{ev.gameModeName}</span>
+                                <span class="badge badge-ghost badge-sm text-[9px] font-bold uppercase">
+                                    {scopeLabel(ev.scope)}
+                                </span>
+                                <p class="font-black text-slate-800 uppercase italic truncate">{ev.eventName}</p>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-3 text-sm text-slate-600 shrink-0">
+                                <span>{ev.seasonName}</span>
+                                {ev.eventDate && (
+                                    <span class="text-[10px] font-bold uppercase text-slate-400">
+                                        {new Date(ev.eventDate).toLocaleDateString("es-CO", {
+                                            dateStyle: "medium",
+                                        })}
+                                    </span>
+                                )}
+                                <span class="badge badge-primary badge-sm font-black">
+                                    {ev.rounds.length} ronda{ev.rounds.length === 1 ? "" : "s"}
+                                </span>
+                                {clasicoContestant && (
+                                    <span class="badge badge-warning badge-sm font-bold gap-1">
+                                        <Icon name="lucide:flame" class="w-3 h-3" />
+                                        {clasicoContestant}
+                                    </span>
+                                )}
+                                <a
+                                    href={`/dashboard/eventos/${ev.eventId}/lanzar`}
+                                    class="btn btn-primary btn-xs text-white font-bold uppercase text-[9px]"
+                                    onclick="event.stopPropagation()"
+                                >
+                                    Lanzar
+                                </a>
+                            </div>
+                        </div>
+                    </summary>
+
+                    <div class="border-t border-base-200 px-5 pb-5">
+                        {ev.rounds.length === 0 ? (
+                            <p class="text-sm text-slate-500 py-4 italic">
+                                Este evento aún no tiene rondas lanzadas. Usa «Lanzar» para abrir una sesión.
+                            </p>
+                        ) : (
+                            <div class="overflow-x-auto">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr class="bg-base-200/60">
+                                            <th class="font-black text-[10px] uppercase text-slate-500">#</th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500">PIN</th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500">Salón / grupo</th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500">Estado</th>
+                                            <th class="font-black text-[10px] uppercase text-slate-500">Inicio</th>
+                                            {ev.gameModeId === 2 ? (
+                                                <th class="font-black text-[10px] uppercase text-slate-500">
+                                                    Concursante (silla)
+                                                </th>
+                                            ) : (
+                                                <th class="font-black text-[10px] uppercase text-slate-500 text-center">
+                                                    Participantes
+                                                </th>
+                                            )}
+                                            <th class="font-black text-[10px] uppercase text-slate-500 text-right">
+                                                Acciones
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {ev.rounds.map((r) => (
+                                            <tr class="border-b border-base-200 last:border-0 hover:bg-base-100/50">
+                                                <td class="font-mono font-bold text-slate-500">{r.roundId}</td>
+                                                <td class="font-mono font-bold">{r.sessionPin}</td>
+                                                <td class="text-sm font-medium text-slate-700 max-w-[10rem] break-words">
+                                                    {r.classroomGroupId}
+                                                </td>
+                                                <td>
+                                                    <span
+                                                        class:list={[
+                                                            "badge badge-sm font-bold text-[9px] uppercase",
+                                                            statusBadge[r.status] || "badge-ghost",
+                                                        ]}
+                                                    >
+                                                        {statusLabel(r.status)}
+                                                    </span>
+                                                </td>
+                                                <td class="text-xs text-slate-600 whitespace-nowrap">
+                                                    {r.sortTime
+                                                        ? new Date(r.sortTime).toLocaleString("es-CO", {
+                                                              dateStyle: "short",
+                                                              timeStyle: "short",
+                                                          })
+                                                        : r.createdAt
+                                                          ? new Date(r.createdAt).toLocaleString("es-CO", {
+                                                                dateStyle: "short",
+                                                                timeStyle: "short",
+                                                            })
+                                                          : "—"}
+                                                </td>
+                                                {ev.gameModeId === 2 ? (
+                                                    <td>
+                                                        {r.contestantName ? (
+                                                            <span class="inline-flex items-center gap-1.5 font-bold text-amber-800 text-sm">
+                                                                <Icon name="lucide:flame" class="w-4 h-4 shrink-0 text-amber-600" />
+                                                                {r.contestantName}
+                                                            </span>
+                                                        ) : (
+                                                            <span class="text-slate-400 text-xs italic">
+                                                                Sin asignar (confirma ganador en Mente más Rápida)
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                ) : (
+                                                    <td class="text-center font-mono font-bold">{r.participantCount}</td>
+                                                )}
+                                                <td class="text-right">
+                                                    <div class="flex flex-wrap justify-end gap-1">
+                                                        {r.status === "waiting" ? (
+                                                            <>
+                                                                <form
+                                                                    method="POST"
+                                                                    action={actions.reopenWaitingRound}
+                                                                    class="inline"
+                                                                    onsubmit="return confirm('¿Relanzar esta sala? Se generará un PIN nuevo y volverás al panel de control.');"
+                                                                >
+                                                                    <input type="hidden" name="round_id" value={r.roundId} />
+                                                                    <input type="hidden" name="regenerate_pin" value="true" />
+                                                                    <FormButton class="btn btn-primary btn-xs text-white font-bold uppercase text-[9px] gap-1">
+                                                                        <Icon name="lucide:rocket" size={14} />
+                                                                        Relanzar
+                                                                    </FormButton>
+                                                                </form>
+                                                                <form
+                                                                    method="POST"
+                                                                    action={actions.reopenWaitingRound}
+                                                                    class="inline"
+                                                                >
+                                                                    <input type="hidden" name="round_id" value={r.roundId} />
+                                                                    <input type="hidden" name="regenerate_pin" value="false" />
+                                                                    <FormButton class="btn btn-ghost btn-xs font-bold uppercase text-[9px] gap-1">
+                                                                        <Icon name="lucide:play" size={14} />
+                                                                        Continuar
+                                                                    </FormButton>
+                                                                </form>
+                                                            </>
+                                                        ) : (
+                                                            <a
+                                                                href={`/dashboard/eventos/control/${r.roundId}`}
+                                                                class="btn btn-ghost btn-xs gap-1 font-bold uppercase text-[9px]"
+                                                            >
+                                                                <Icon name="lucide:external-link" size={14} />
+                                                                Panel
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </details>
+            );
+            })}
+        </div>
+    )}
+
+    <div class="flex flex-col sm:flex-row items-center justify-between gap-4 mt-10 pt-6 border-t border-base-300">
+        <p class="text-sm text-slate-500 font-medium">
+            {totalCount === 0
+                ? "Sin eventos"
+                : `Página ${page} de ${totalPages} · ${totalCount} evento${totalCount === 1 ? "" : "s"}`}
+        </p>
+        {totalPages > 1 && (
+            <div class="join">
+                <a
+                    href={hasPrev ? buildUrl(page - 1) : "#"}
+                    class:list={["join-item btn btn-sm", !hasPrev && "btn-disabled pointer-events-none"]}
+                    aria-label="Anterior"
+                >
+                    ‹
+                </a>
+                {pageNumbers.map((p) => (
+                    <a href={buildUrl(p)} class:list={["join-item btn btn-sm", p === page && "btn-primary"]}>
+                        {p}
+                    </a>
+                ))}
+                <a
+                    href={hasNext ? buildUrl(page + 1) : "#"}
+                    class:list={["join-item btn btn-sm", !hasNext && "btn-disabled pointer-events-none"]}
+                    aria-label="Siguiente"
+                >
+                    ›
+                </a>
+            </div>
+        )}
+    </div>
+</DashboardLayout>
+
+<style>
+    details > summary::-webkit-details-marker {
+        display: none;
+    }
+    details > summary::after {
+        content: "▸";
+        float: right;
+        font-size: 0.75rem;
+        color: rgb(100 116 139);
+        transition: transform 0.15s;
+    }
+    details[open] > summary::after {
+        transform: rotate(90deg);
+    }
+</style>

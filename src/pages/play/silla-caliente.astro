@@ -33,12 +33,15 @@ const clasicoEntry = clasicoEvent && acList?.length
     ? acList.find((a) => a.event_id === clasicoEvent.id)
     : null;
 
+let clasicoPin: string | null = null;
 if (clasicoEntry?.round_id) {
     const { data: round } = await supabaseAdmin
         .from('event_rounds')
-        .select('status')
+        .select('status, session_pin')
         .eq('id', clasicoEntry.round_id)
         .single();
+
+    clasicoPin = round?.session_pin ?? null;
 
     if (round?.status === 'waiting' || round?.status === 'active') {
         return Astro.redirect(`/play/waiting/${clasicoEntry.round_id}`);
@@ -51,9 +54,16 @@ if (clasicoEntry?.round_id) {
         <h1 class="text-3xl font-black italic uppercase mb-4">Silla Caliente</h1>
         <p class="text-zinc-400 max-w-md">
             {clasicoEntry
-                ? "La Silla Caliente aún no está lista. Espera a que el docente abra la ronda."
+                ? "La Silla Caliente aún no está lista. Espera a que el docente inicie la ronda en el panel de control."
                 : "No tienes acceso a Silla Caliente. Solo el ganador de Mente más Rápida puede entrar."}
         </p>
+        {clasicoPin && (
+            <div class="mt-6 p-4 bg-amber-500/20 border border-amber-500/50 rounded-2xl max-w-xs">
+                <p class="text-amber-400 text-xs font-black uppercase mb-1">Tu PIN de Silla Caliente</p>
+                <p class="text-3xl font-mono font-black tracking-widest">{clasicoPin}</p>
+                <p class="text-zinc-500 text-xs mt-2">También puedes usarlo en Unirse (/play) cuando el docente active el juego.</p>
+            </div>
+        )}
         <a href="/play" class="btn btn-primary mt-8">Volver a Unirse</a>
     </div>
 </PlayLayout>

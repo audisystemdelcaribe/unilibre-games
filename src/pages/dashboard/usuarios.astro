@@ -2,6 +2,7 @@
 import DashboardLayout from "@/layouts/DashboardLayout.astro";
 import { Icon } from 'astro-icon/components';
 import { actions } from "astro:actions";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 const user = await Astro.locals.getUser();
 if (!user) return Astro.redirect("/");
@@ -31,6 +32,15 @@ if (programFilter) {
 }
 
 const { data: players, count: filteredCount } = await playersQuery;
+
+const emailByAuthId: Record<string, string> = {};
+const authIds = [...new Set((players || []).map((p) => p.auth_user_id).filter(Boolean))] as string[];
+await Promise.all(
+    authIds.map(async (uid) => {
+        const { data } = await supabaseAdmin.auth.admin.getUserById(uid);
+        if (data?.user?.email) emailByAuthId[uid] = data.user.email;
+    })
+);
 
 const { count: totalCount } = await Astro.locals.supabase
     .from('players')
@@ -119,6 +129,7 @@ const result = Astro.getActionResult(actions.createUser)
                 <thead>
                     <tr class="bg-slate-50 border-b border-slate-100">
                         <th class="py-5 px-8 text-slate-400 font-black uppercase text-[10px] tracking-widest">Usuario</th>
+                        <th class="py-5 px-8 text-slate-400 font-black uppercase text-[10px] tracking-widest">Correo</th>
                         <th class="py-5 px-8 text-slate-400 font-black uppercase text-[10px] tracking-widest">Programa / Semestre</th>
                         <th class="py-5 px-8 text-slate-400 font-black uppercase text-[10px] tracking-widest text-center">Rol Actual</th>
                         <th class="py-5 px-8 text-slate-400 font-black uppercase text-[10px] tracking-widest text-right">Acciones</th>
@@ -137,6 +148,11 @@ const result = Astro.getActionResult(actions.createUser)
                                         <p class="text-xs text-slate-400 font-medium">ID: {p.id}</p>
                                     </div>
                                 </div>
+                            </td>
+                            <td class="py-4 px-8 min-w-[12rem]">
+                                <p class="text-sm text-slate-600 break-all">
+                                    {p.auth_user_id ? (emailByAuthId[p.auth_user_id] ?? '—') : '—'}
+                                </p>
                             </td>
                             <td class="py-4 px-8">
                                 <p class="text-sm font-bold text-slate-700">{p.programs?.name || 'N/A'}</p>

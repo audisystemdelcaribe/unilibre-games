@@ -1,4 +1,10 @@
 import type { APIRoute } from "astro";
+import { buildClasicoRoundMeta } from "@/lib/clasicoRoundContestant";
+import {
+    findClasicoEventForScope,
+    resolveRoundEvent,
+    setupClasicoWinner,
+} from "@/lib/clasicoTransition";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 /**
@@ -70,37 +76,15 @@ export const POST: APIRoute = async ({ request, locals }) => {
         });
     }
 
-    // Supabase puede devolver la relación como objeto o como array
-    const rawEvents = round.events;
-    const evt = (Array.isArray(rawEvents) ? rawEvents[0] : rawEvents) as {
-        season_id?: number;
-        program_id?: number | null;
-        faculty_id?: number | null;
-        scope?: string;
-    } | null;
-    const seasonId = evt?.season_id;
-    if (!seasonId) {
+    const evt = resolveRoundEvent(round.events);
+    if (!evt?.season_id) {
         return new Response(JSON.stringify({ error: "No se pudo obtener la temporada del evento" }), {
             status: 400,
             headers: { "Content-Type": "application/json" },
         });
     }
 
-    let clasicoQuery = supabaseAdmin
-        .from("events")
-        .select("id")
-        .eq("season_id", seasonId)
-        .eq("game_mode_id", 2);
-
-    if (evt?.scope === "program" && evt?.program_id) {
-        clasicoQuery = clasicoQuery.eq("program_id", evt.program_id).eq("scope", "program");
-    } else if (evt?.scope === "faculty" && evt?.faculty_id) {
-        clasicoQuery = clasicoQuery.eq("faculty_id", evt.faculty_id).eq("scope", "faculty");
-    } else {
-        clasicoQuery = clasicoQuery.eq("scope", evt?.scope || "global");
-    }
-
-    const { data: clasicoEvent } = await clasicoQuery.limit(1).maybeSingle();
+    const clasicoEvent = await findClasicoEventForScope(supabaseAdmin, evt);
 
     if (!clasicoEvent) {
         const scopeHint =
@@ -124,6 +108,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
                 status: "waiting",
                 classroom_group_id: "Silla Caliente",
                 session_pin,
+                verification_result: buildClasicoRoundMeta(pId, rId),
             },
         ])
         .select()
@@ -136,23 +121,15 @@ export const POST: APIRoute = async ({ request, locals }) => {
         });
     }
 
-    await supabaseAdmin.from("event_players").upsert(
-        {
-            event_id: clasicoEvent.id,
-            player_id: pId,
-            classroom_group_id: "Silla Caliente",
-            stage: "lobby",
-        },
-        { onConflict: "event_id, player_id" }
-    );
-
-    const { error: acErr } = await supabaseAdmin.from("active_contestants").upsert(
-        { event_id: clasicoEvent.id, player_id: pId, round_id: clasicoRound.id },
-        { onConflict: "event_id" }
-    );
-
-    if (acErr) {
-        return new Response(JSON.stringify({ error: acErr.message }), {
+    try {
+        await setupClasicoWinner(supabaseAdmin, {
+            playerId: pId,
+            clasicoEventId: clasicoEvent.id,
+            clasicoRoundId: clasicoRound.id,
+        });
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : "Error al registrar al ganador";
+        return new Response(JSON.stringify({ error: msg }), {
             status: 500,
             headers: { "Content-Type": "application/json" },
         });
